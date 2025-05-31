@@ -1,3 +1,4 @@
+WIP
 feat: Add Python MoviePrint tool with CLI and GUI
 This commit introduces a new Python-based application, "MoviePrint,"
 designed to generate visual summaries (contact sheets) of videos.
