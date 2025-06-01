@@ -7,6 +7,9 @@ import threading
 import queue
 import cv2
 import json # << NEW IMPORT for saving/loading settings
+from tkinterdnd2 import DND_FILES, TkinterDnD
+from PIL import ImageTk, Image
+
 
 # Attempt to import the backend logic
 try:
@@ -60,42 +63,78 @@ class Tooltip:
 
 class MoviePrintApp:
     def __init__(self):
-        self.root = tk.Tk()
+        self.root = TkinterDnD.Tk()
         self.root.title("MoviePrint Generator")
         self.root.geometry("780x950")
 
-        # --- Initialize StringVars (as before) ---
-        self.input_paths_var = tk.StringVar()
-        self.output_dir_var = tk.StringVar()
-        self.extraction_mode_var = tk.StringVar(value="interval")
-        self.interval_seconds_var = tk.StringVar(value="5.0")
-        self.interval_frames_var = tk.StringVar(value="")
-        self.shot_threshold_var = tk.StringVar(value="27.0")
-        self.exclude_frames_var = tk.StringVar()
-        self.exclude_shots_var = tk.StringVar()
-        self.layout_mode_var = tk.StringVar(value="grid")
-        self.num_columns_var = tk.StringVar(value="5")
-        self.target_row_height_var = tk.StringVar(value="150")
-        self.output_image_width_var = tk.StringVar(value="1920")
-        self.padding_var = tk.StringVar(value="5")
-        self.background_color_var = tk.StringVar(value="#FFFFFF")
-        self.frame_format_var = tk.StringVar(value="jpg")
-        self.save_metadata_json_var = tk.BooleanVar(value=True)
-        self.detect_faces_var = tk.BooleanVar(value=False)
-        self.rotate_thumbnails_var = tk.IntVar(value=0)
-        self.start_time_var = tk.StringVar()
-        self.end_time_var = tk.StringVar()
-        self.output_filename_suffix_var = tk.StringVar(value="_movieprint")
-        self.output_filename_var = tk.StringVar()
-        self.video_extensions_var = tk.StringVar(value=".mp4,.avi,.mov,.mkv,.flv,.wmv")
-        self.recursive_scan_var = tk.BooleanVar(value=False)
-        self.temp_dir_var = tk.StringVar() # For custom temp directory
-        self.haar_cascade_xml_var = tk.StringVar()
-        self.max_frames_for_print_var = tk.StringVar(value="100")
-        self.target_thumbnail_width_var = tk.StringVar(value="") # Or a default like "320"
+        self._internal_input_paths = [] # Initialize for drag-and-drop and settings load
+        self.thumbnail_images = [] # To store PhotoImage objects for preview
 
-        # --- Load persistent settings ---
-        self._load_persistent_settings() # << NEW CALL
+        # --- Define Default Settings Store ---
+        self.default_settings = {
+            "input_paths_var": "",
+            "output_dir_var": "",
+            "extraction_mode_var": "interval",
+            "interval_seconds_var": "5.0",
+            "interval_frames_var": "",
+            "shot_threshold_var": "27.0",
+            "exclude_frames_var": "",
+            "exclude_shots_var": "",
+            "layout_mode_var": "grid",
+            "num_columns_var": "5",
+            "target_row_height_var": "150", # Used in timeline
+            "output_image_width_var": "1920", # Used in timeline
+            "padding_var": "5",
+            "background_color_var": "#FFFFFF",
+            "frame_format_var": "jpg",
+            "save_metadata_json_var": True,
+            "detect_faces_var": False,
+            "rotate_thumbnails_var": 0,
+            "start_time_var": "",
+            "end_time_var": "",
+            "output_filename_suffix_var": "_movieprint",
+            "output_filename_var": "",
+            "video_extensions_var": ".mp4,.avi,.mov,.mkv,.flv,.wmv",
+            "recursive_scan_var": False,
+            "temp_dir_var": "",
+            "haar_cascade_xml_var": "",
+            "max_frames_for_print_var": "100",
+            "target_thumbnail_width_var": ""
+        }
+
+        # --- Initialize Tk Variables using default_settings ---
+        self.input_paths_var = tk.StringVar(value=self.default_settings["input_paths_var"])
+        self.output_dir_var = tk.StringVar(value=self.default_settings["output_dir_var"])
+        self.extraction_mode_var = tk.StringVar(value=self.default_settings["extraction_mode_var"])
+        self.interval_seconds_var = tk.StringVar(value=self.default_settings["interval_seconds_var"])
+        self.interval_frames_var = tk.StringVar(value=self.default_settings["interval_frames_var"])
+        self.shot_threshold_var = tk.StringVar(value=self.default_settings["shot_threshold_var"])
+        self.exclude_frames_var = tk.StringVar(value=self.default_settings["exclude_frames_var"])
+        self.exclude_shots_var = tk.StringVar(value=self.default_settings["exclude_shots_var"])
+        self.layout_mode_var = tk.StringVar(value=self.default_settings["layout_mode_var"])
+        self.num_columns_var = tk.StringVar(value=self.default_settings["num_columns_var"])
+        self.target_row_height_var = tk.StringVar(value=self.default_settings["target_row_height_var"])
+        self.output_image_width_var = tk.StringVar(value=self.default_settings["output_image_width_var"])
+        self.padding_var = tk.StringVar(value=self.default_settings["padding_var"])
+        self.background_color_var = tk.StringVar(value=self.default_settings["background_color_var"])
+        self.frame_format_var = tk.StringVar(value=self.default_settings["frame_format_var"])
+        self.save_metadata_json_var = tk.BooleanVar(value=self.default_settings["save_metadata_json_var"])
+        self.detect_faces_var = tk.BooleanVar(value=self.default_settings["detect_faces_var"])
+        self.rotate_thumbnails_var = tk.IntVar(value=self.default_settings["rotate_thumbnails_var"])
+        self.start_time_var = tk.StringVar(value=self.default_settings["start_time_var"])
+        self.end_time_var = tk.StringVar(value=self.default_settings["end_time_var"])
+        self.output_filename_suffix_var = tk.StringVar(value=self.default_settings["output_filename_suffix_var"])
+        self.output_filename_var = tk.StringVar(value=self.default_settings["output_filename_var"])
+        self.video_extensions_var = tk.StringVar(value=self.default_settings["video_extensions_var"])
+        self.recursive_scan_var = tk.BooleanVar(value=self.default_settings["recursive_scan_var"])
+        self.temp_dir_var = tk.StringVar(value=self.default_settings["temp_dir_var"])
+        self.haar_cascade_xml_var = tk.StringVar(value=self.default_settings["haar_cascade_xml_var"])
+        self.max_frames_for_print_var = tk.StringVar(value=self.default_settings["max_frames_for_print_var"])
+        self.max_frames_for_print_var.trace_add("write", self._handle_max_frames_change)
+        self.target_thumbnail_width_var = tk.StringVar(value=self.default_settings["target_thumbnail_width_var"])
+
+        # --- Load persistent settings (will override defaults if settings file exists) ---
+        self._load_persistent_settings()
 
         self.queue = queue.Queue()
         main_frame = ttk.Frame(self.root, padding="10")
@@ -169,6 +208,14 @@ class MoviePrintApp:
     def _on_closing(self):
         self._save_persistent_settings()
         self.root.destroy()
+
+    def _handle_max_frames_change(self, *args):
+        # Check if a single video file is selected
+        if hasattr(self, '_internal_input_paths') and \
+           len(self._internal_input_paths) == 1 and \
+           os.path.isfile(self._internal_input_paths[0]):
+            self.queue.put(("log", f"Max frames changed. Recalculating interval for {os.path.basename(self._internal_input_paths[0])}..."))
+            self._auto_calculate_and_set_interval(self._internal_input_paths[0])
     # --- END NEW METHODS ---
 
     # ... (rest of the _create_... and helper methods as before) ...
@@ -181,9 +228,11 @@ class MoviePrintApp:
         Tooltip(lbl_input, "Select one or more video files, or a single directory containing videos.")
         self.input_paths_entry = ttk.Entry(input_section, textvariable=self.input_paths_var, state="readonly", width=60)
         self.input_paths_entry.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=5)
+        self.input_paths_entry.drop_target_register(DND_FILES)
+        self.input_paths_entry.dnd_bind('<<Drop>>', self.handle_drop)
         btn_browse_input = ttk.Button(input_section, text="Browse...", command=self.browse_input_paths)
         btn_browse_input.grid(row=0, column=2, padx=5, pady=5)
-        Tooltip(btn_browse_input, "Browse for video files or a directory.")
+        Tooltip(btn_browse_input, "Browse for video files or a directory. You can also drag & drop files/folders onto the input field.")
         lbl_output_dir = ttk.Label(input_section, text="Output Directory:")
         lbl_output_dir.grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
         Tooltip(lbl_output_dir, "Directory where MoviePrints will be saved.")
@@ -200,14 +249,77 @@ class MoviePrintApp:
         tab_layout = ttk.Frame(notebook, padding="5")
         tab_batch_output = ttk.Frame(notebook, padding="5")
         tab_common = ttk.Frame(notebook, padding="5")
+        self.tab_preview = ttk.Frame(notebook, padding="5") # New Preview Tab
+
         notebook.add(tab_extraction, text='Extraction & Segment')
         notebook.add(tab_layout, text='Layout')
+        notebook.add(self.tab_preview, text='Thumbnail Preview') # Add to notebook
         notebook.add(tab_batch_output, text='Batch & Output')
         notebook.add(tab_common, text='Common & Advanced')
+
         self._populate_extraction_tab(tab_extraction)
         self._populate_layout_tab(tab_layout)
+        self._populate_preview_tab(self.tab_preview) # Populate new tab
         self._populate_batch_output_tab(tab_batch_output)
         self._populate_common_tab(tab_common)
+
+    def _populate_preview_tab(self, tab):
+        tab.columnconfigure(0, weight=1) # Make the preview area expand
+
+        self.btn_preview_thumbs = ttk.Button(tab, text="Preview Extracted Thumbnails", command=self.start_thumbnail_preview_generation)
+        self.btn_preview_thumbs.pack(pady=10)
+        Tooltip(self.btn_preview_thumbs, "Generate and display a preview of thumbnails based on current extraction settings for the selected video(s).")
+
+        preview_outer_frame = ttk.LabelFrame(tab, text="Thumbnails", padding="10")
+        preview_outer_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        preview_outer_frame.rowconfigure(0, weight=1)
+        preview_outer_frame.columnconfigure(0, weight=1)
+
+        self.canvas_thumbs = tk.Canvas(preview_outer_frame, borderwidth=0, background="#ECECEC") # Light grey background
+        self.frame_thumbs_inner = ttk.Frame(self.canvas_thumbs, padding="5")
+
+        self.canvas_thumbs.create_window((0, 0), window=self.frame_thumbs_inner, anchor="nw", tags="self.frame_thumbs_inner")
+
+        vsb = ttk.Scrollbar(preview_outer_frame, orient="vertical", command=self.canvas_thumbs.yview)
+        self.canvas_thumbs.configure(yscrollcommand=vsb.set)
+
+        vsb.grid(row=0, column=1, sticky="ns")
+        self.canvas_thumbs.grid(row=0, column=0, sticky="nsew")
+
+        self.frame_thumbs_inner.bind("<Configure>", lambda e: self.canvas_thumbs.configure(scrollregion=self.canvas_thumbs.bbox("all")))
+
+        # Mouse wheel bindings
+        self.canvas_thumbs.bind_all("<MouseWheel>", self._on_mousewheel) # Windows/macOS
+        self.canvas_thumbs.bind_all("<Button-4>", self._on_mousewheel)   # Linux (scroll up)
+        self.canvas_thumbs.bind_all("<Button-5>", self._on_mousewheel)   # Linux (scroll down)
+
+    def _on_mousewheel(self, event):
+        # For Linux, event.num determines scroll direction
+        if hasattr(event, 'num') and event.num == 4:
+            self.canvas_thumbs.yview_scroll(-1, "units")
+        elif hasattr(event, 'num') and event.num == 5:
+            self.canvas_thumbs.yview_scroll(1, "units")
+        elif hasattr(event, 'delta'): # For Windows/macOS, event.delta
+            self.canvas_thumbs.yview_scroll(int(-1*(event.delta/120)), "units")
+        # Pass the event to other handlers if not consumed by this canvas
+        # This is important if other widgets also need mouse wheel events.
+        # However, for this specific canvas, we might want to consume it.
+        # For now, let it propagate if needed, but often one might return "break"
+        # if the scroll happened over the intended widget.
+
+    def start_thumbnail_preview_generation(self):
+        # Placeholder for future implementation
+        self.queue.put(("log", "Thumbnail preview generation initiated (placeholder)."))
+        # Example: Clear previous thumbnails
+        for widget in self.frame_thumbs_inner.winfo_children():
+            widget.destroy()
+        self.thumbnail_images.clear() # Clear stored PhotoImage objects
+
+        # Example: Add a dummy label
+        # lbl = ttk.Label(self.frame_thumbs_inner, text="Previewing...")
+        # lbl.pack(pady=20)
+        # self.canvas_thumbs.configure(scrollregion=self.canvas_thumbs.bbox("all"))
+        pass
 
     def _populate_extraction_tab(self, tab):
         tab.columnconfigure(1, weight=1)
@@ -379,6 +491,40 @@ class MoviePrintApp:
         self.detect_faces_check.grid(row=7, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
         Tooltip(self.detect_faces_check, "Enable face detection on thumbnails. This can be performance intensive.")
 
+        # Add Reset to Defaults button
+        btn_reset_defaults = ttk.Button(tab, text="Reset All Settings to Defaults", command=self.confirm_reset_all_settings)
+        btn_reset_defaults.grid(row=8, column=0, columnspan=3, sticky=tk.W, padx=5, pady=20) # columnspan to fit button text
+        Tooltip(btn_reset_defaults, "Resets all settings in the GUI to their original default values. Input/Output paths are not reset.")
+
+
+    def confirm_reset_all_settings(self):
+        if messagebox.askyesno("Confirm Reset", "Are you sure you want to reset all settings to their default values?\nAll current unsaved changes to settings will be lost.\nInput/Output paths will NOT be reset."):
+            self.perform_reset_all_settings()
+
+    def perform_reset_all_settings(self):
+        self._gui_log_callback("Resetting all settings to defaults...")
+
+        # Explicitly reset input and output paths first
+        self.input_paths_var.set(self.default_settings.get("input_paths_var", ""))
+        self._internal_input_paths = [] # Clear the internal list of paths
+        self.output_dir_var.set(self.default_settings.get("output_dir_var", ""))
+
+        # Iterate through the rest of the settings
+        for var_key, default_value in self.default_settings.items():
+            if var_key not in ["input_paths_var", "output_dir_var"]: # Skip already handled ones
+                try:
+                    # Get the actual Tkinter variable instance (e.g., self.extraction_mode_var)
+                    tk_var_instance = getattr(self, var_key)
+                    tk_var_instance.set(default_value)
+                except AttributeError:
+                    self._gui_log_callback(f"Warning: Could not reset setting for '{var_key}' - variable not found.")
+                except Exception as e:
+                    self._gui_log_callback(f"Warning: Error resetting setting for '{var_key}': {e}")
+
+        self.update_options_visibility() # Refresh UI elements based on new (default) values
+        self._gui_log_callback("All settings have been reset to their default values.")
+
+
     def _create_action_log_section(self, parent_frame):
         # ... (content as before) ...
         action_section = ttk.Frame(parent_frame, padding="10")
@@ -476,6 +622,74 @@ class MoviePrintApp:
     def browse_specific_file(self, tk_var, title_text, file_types):
         filepath = filedialog.askopenfilename(title=title_text, filetypes=file_types)
         if filepath: tk_var.set(filepath)
+
+    def handle_drop(self, event):
+        data_string = event.data
+        dropped_paths = []
+        # TkinterDnD might return paths in curly braces if they contain spaces,
+        # and multiple paths are space-separated.
+        # Example: '{/path/to/file with space.mp4} /path/to/another.avi'
+        # Or a single path: '/path/to/singlefile.mkv'
+        # Or a single path with space: '{/path with space/video.mp4}'
+
+        current_path = ""
+        in_braces = False
+        for char in data_string:
+            if char == '{' and not in_braces:
+                in_braces = True
+            elif char == '}' and in_braces:
+                in_braces = False
+                dropped_paths.append(current_path)
+                current_path = ""
+            elif char == ' ' and not in_braces:
+                if current_path: # Path without spaces
+                    dropped_paths.append(current_path)
+                    current_path = ""
+            else:
+                current_path += char
+        if current_path: # Add any remaining path
+            dropped_paths.append(current_path)
+
+        # Further clean up: remove leading/trailing whitespace from each path
+        dropped_paths = [p.strip() for p in dropped_paths if p.strip()]
+
+        if not dropped_paths:
+            self.queue.put(("log", "Drag & drop: No valid paths found in dropped data."))
+            return
+
+        self.queue.put(("log", f"Drag & drop: Received data: {data_string}"))
+        self.queue.put(("log", f"Drag & drop: Parsed paths: {dropped_paths}"))
+
+        if len(dropped_paths) == 1 and os.path.isdir(dropped_paths[0]):
+            dir_path = dropped_paths[0]
+            self._internal_input_paths = [dir_path]
+            self.input_paths_var.set(dir_path)
+            self.interval_seconds_var.set("5.0") # Reset interval for directory
+            self.queue.put(("log", f"Drag & drop: Directory '{os.path.basename(dir_path)}' selected. Manual interval recommended (reset to 5.0s)."))
+        else:
+            # Filter for files, assuming they are videos for now.
+            # Backend will ultimately filter by extension.
+            video_files = [p for p in dropped_paths if os.path.isfile(p)]
+
+            if not video_files:
+                self.queue.put(("log", "Drag & drop: No valid files found in dropped items."))
+                # Potentially show an error or just log, depending on desired UX
+                # For now, if a directory was mixed with non-files and not caught above,
+                # this will prevent processing.
+                return
+
+            self._internal_input_paths = video_files
+            self.input_paths_var.set("; ".join(self._internal_input_paths))
+
+            if len(self._internal_input_paths) == 1:
+                # Already checked it's a file by being in video_files
+                self.queue.put(("log", f"Drag & drop: Single file '{os.path.basename(self._internal_input_paths[0])}' selected."))
+                # Delay slightly to allow GUI to update input field text before potential modal dialogs from auto-calc
+                self.root.after(100, lambda p=self._internal_input_paths[0]: self._auto_calculate_and_set_interval(p))
+            else:
+                self.interval_seconds_var.set("5.0") # Reset interval for multiple files
+                self.queue.put(("log", f"Drag & drop: Multiple files ({len(self._internal_input_paths)}) selected. Manual interval recommended (reset to 5.0s)."))
+
 
     def log_message_from_thread(self, message): 
         self.log_text.config(state="normal")
