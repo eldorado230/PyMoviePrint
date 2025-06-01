@@ -132,6 +132,11 @@ class MoviePrintApp:
                     self.max_frames_for_print_var.set(settings.get("max_frames_for_print", "100"))
                     self.num_columns_var.set(settings.get("num_columns", "5"))
                     self.interval_seconds_var.set(settings.get("interval_seconds", "5.0"))
+                    # Load commonly adjusted layout and operational settings (with defaults)
+                    self.layout_mode_var.set(settings.get("layout_mode", "grid"))
+                    self.padding_var.set(settings.get("padding", "5"))
+                    self.background_color_var.set(settings.get("background_color", "#FFFFFF"))
+                    self.extraction_mode_var.set(settings.get("extraction_mode", "interval"))
                     # ... and so on for any other settings you want to persist ...
         except Exception as e:
             print(f"Error loading persistent settings: {e}") # Or log to GUI queue if possible early
@@ -144,6 +149,11 @@ class MoviePrintApp:
             "max_frames_for_print": self.max_frames_for_print_var.get(),
             "num_columns": self.num_columns_var.get(),
             "interval_seconds": self.interval_seconds_var.get(),
+            # Save commonly adjusted layout and operational settings
+            "layout_mode": self.layout_mode_var.get(),
+            "padding": self.padding_var.get(),
+            "background_color": self.background_color_var.get(),
+            "extraction_mode": self.extraction_mode_var.get(),
             # ... add any other settings from StringVars ...
         }
         try:
