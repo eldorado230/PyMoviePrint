@@ -259,7 +259,9 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
     grid_params = { 'image_source_data': items_for_grid_input, 'output_path': final_movieprint_path,
         'padding': settings.padding, 'background_color_hex': settings.background_color, 
         'layout_mode': settings.layout_mode, 'logger': logger } # Pass logger to image_grid
-    if settings.layout_mode == "grid": grid_params['columns'] = settings.columns
+    if settings.layout_mode == "grid":
+        grid_params['columns'] = settings.columns
+        grid_params['target_thumbnail_width'] = getattr(settings, 'target_thumbnail_width', None)
     elif settings.layout_mode == "timeline":
         grid_params['target_row_height'] = settings.target_row_height
         grid_params['max_grid_width'] = settings.output_image_width
@@ -420,7 +422,14 @@ def main():
     layout_group = parser.add_argument_group("Layout Options")
     layout_group.add_argument("--layout_mode", type=str, default="grid", choices=["grid", "timeline"], help="Layout mode (default: grid).")
     layout_group.add_argument("--columns", type=int, default=5, help="For 'grid' layout: number of columns (default: 5).")
-    # --- NEW CLI ARG ---
+    layout_group.add_argument(
+        "--target_thumbnail_width",
+        type=int,
+        default=None,
+        help="For 'grid' layout: target width for individual thumbnails (e.g., 320). "
+             "Overrides automatic sizing based on largest frame. "
+             "Final grid cell height will be adjusted to accommodate the tallest thumbnail scaled to this width."
+    )
     layout_group.add_argument("--max_frames_for_print", type=int, default=None, help="For 'grid' layout: Target maximum number of frames in the final print. Samples down if extraction yields more.")
     layout_group.add_argument("--target_row_height", type=int, default=100, help="For 'timeline' layout: row height (default: 100).")
     layout_group.add_argument("--output_image_width", type=int, default=1200, help="For 'timeline' layout: output image width (default: 1200).")
@@ -454,6 +463,14 @@ def main():
         if args.exclude_frames: parser.error("--exclude_frames only with --extraction_mode 'interval'.")
     if args.layout_mode == "timeline" and args.extraction_mode != "shot": 
         parser.error("--layout_mode 'timeline' requires --extraction_mode 'shot'.")
+
+    # Validations for target_thumbnail_width
+    if args.layout_mode != "grid" and args.target_thumbnail_width is not None:
+        logger.warning("--target_thumbnail_width is only applicable for 'grid' layout mode and will be ignored.")
+        # args.target_thumbnail_width = None # Optionally reset, or let image_grid handle it if it's robust
+    if args.target_thumbnail_width is not None and args.target_thumbnail_width <= 0:
+        parser.error("--target_thumbnail_width must be a positive integer.")
+
     if args.layout_mode == "timeline" and args.max_frames_for_print is not None:
         logger.warning("--max_frames_for_print is ignored for 'timeline' layout mode.")
         args.max_frames_for_print = None # Ensure it's not used for timeline
