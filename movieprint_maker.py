@@ -7,12 +7,12 @@ import glob
 import json 
 import re 
 import cv2 
+import math # For ceil, for frame selection
 
 try:
     import video_processing
     import image_grid 
 except ImportError as e:
-    # This initial print is fine for CLI startup or module import errors
     print(f"Error importing modules: {e}")
     print("Please ensure 'video_processing.py' and 'image_grid.py' are in the same directory"
           " or accessible in the Python path.")
@@ -58,18 +58,13 @@ def discover_video_files(input_sources, valid_extensions_str, recursive_scan, lo
 
 
 def process_single_video(video_file_path, settings, effective_output_filename, logger):
-        # --- New wrapper function ---
-        def log_callback(message, level="info"):
-            if level == "warning":
-                logger.warning(message)
-            elif level == "error":
-                logger.error(message)
-            elif level == "exception":
-                logger.exception(message)
-            else: # default to info
-                logger.info(message)
-        # --- End of new wrapper ---
-        log_callback(f"\nProcessing video: {video_file_path}...")
+    def log_callback(message, level="info"): # Renamed from local logger to log_callback for clarity
+        if level == "warning": logger.warning(message)
+        elif level == "error": logger.error(message)
+        elif level == "exception": logger.exception(message)
+        else: logger.info(message)
+    
+    log_callback(f"\nProcessing video: {video_file_path}...")
 
     start_time_sec = parse_time_to_seconds(settings.start_time)
     end_time_sec = parse_time_to_seconds(settings.end_time)
@@ -97,18 +92,21 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
     extraction_ok = False
     source_frame_metadata_list = [] 
     
+    # Pass logger to video_processing functions
     if settings.extraction_mode == "interval":
         extraction_ok, source_frame_metadata_list = video_processing.extract_frames(
             video_path=video_file_path, output_folder=temp_frames_output_folder,
             interval_seconds=settings.interval_seconds, interval_frames=settings.interval_frames,
             output_format=settings.frame_format,
-            start_time_sec=start_time_sec, end_time_sec=end_time_sec
+            start_time_sec=start_time_sec, end_time_sec=end_time_sec,
+            logger=logger 
         )
     elif settings.extraction_mode == "shot":
         extraction_ok, source_frame_metadata_list = video_processing.extract_shot_boundary_frames(
             video_path=video_file_path, output_folder=temp_frames_output_folder,
             output_format=settings.frame_format, detector_threshold=settings.shot_threshold,
-            start_time_sec=start_time_sec, end_time_sec=end_time_sec
+            start_time_sec=start_time_sec, end_time_sec=end_time_sec,
+            logger=logger
         )
 
     if not extraction_ok: 
@@ -147,7 +145,44 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
                  excluded_items_info_for_log.append(f"excluded_shot_idx:{requested_idx_1_based}")
 
     if initial_thumb_count > 0 and len(source_frame_metadata_list) < initial_thumb_count:
-        logger.info(f"  Applied exclusions: {initial_thumb_count - len(source_frame_metadata_list)} thumbnails removed.")
+        logger.info(f"  Applied exclusions: {initial_thumb_count - len(source_frame_metadata_list)} thumbnails removed. {len(source_frame_metadata_list)} remaining.")
+
+
+    # --- NEW: Frame Count Limiting for Grid Mode ---
+    if settings.layout_mode == "grid" and hasattr(settings, 'max_frames_for_print') and \
+       settings.max_frames_for_print is not None and \
+       len(source_frame_metadata_list) > settings.max_frames_for_print:
+        
+        num_to_select = settings.max_frames_for_print
+        original_count = len(source_frame_metadata_list)
+        logger.info(f"  Limiting {original_count} extracted frames to a maximum of {num_to_select} for the print.")
+        
+        # Simple selection: pick frames evenly spaced from the original list
+        indices_to_pick = [int(i * (original_count -1) / (num_to_select -1)) for i in range(num_to_select)]
+        if num_to_select == 1 and original_count > 0: # Edge case for selecting only 1 frame
+            indices_to_pick = [0] 
+        
+        selected_frames_metadata = [source_frame_metadata_list[i] for i in sorted(list(set(indices_to_pick)))] # set to remove duplicates if any from calculation
+        
+        # Ensure we don't exceed the target due to rounding or selection logic, trim if necessary
+        if len(selected_frames_metadata) > num_to_select:
+            selected_frames_metadata = selected_frames_metadata[:num_to_select]
+
+        # Cleanup unselected frames if they are temporary (this part is tricky if temp_dir is user-specified not to be cleaned)
+        if cleanup_temp_dir_for_this_video: # Only attempt if we created this temp_dir
+            frames_to_keep_paths = {meta['frame_path'] for meta in selected_frames_metadata}
+            all_extracted_paths_in_temp = glob.glob(os.path.join(temp_frames_output_folder, f"*.{settings.frame_format}"))
+            for temp_frame_path in all_extracted_paths_in_temp:
+                if temp_frame_path not in frames_to_keep_paths:
+                    try:
+                        os.remove(temp_frame_path)
+                        # logger.debug(f"    Removed unselected temp frame: {temp_frame_path}") # Optional: too verbose for info
+                    except OSError as e:
+                        logger.warning(f"    Could not remove unselected temp frame {temp_frame_path}: {e}")
+        
+        source_frame_metadata_list = selected_frames_metadata
+        logger.info(f"  Selected {len(source_frame_metadata_list)} frames to proceed with grid generation.")
+    # --- END NEW: Frame Count Limiting ---
 
     face_cascade = None
     if settings.detect_faces:
@@ -197,7 +232,7 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
                                 for sm in source_frame_metadata_list if sm.get('duration_frames', 0) > 0]
         if not items_for_grid_input and source_frame_metadata_list:
              logger.warning("  No shots with positive duration remain for timeline view.")
-    else: 
+    else: # grid mode
          items_for_grid_input = [meta['frame_path'] for meta in source_frame_metadata_list]
 
     if not items_for_grid_input: 
@@ -222,7 +257,8 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
     logger.info(f"  Generating MoviePrint ({settings.layout_mode} layout) -> {final_movieprint_path}")
     
     grid_params = { 'image_source_data': items_for_grid_input, 'output_path': final_movieprint_path,
-        'padding': settings.padding, 'background_color_hex': settings.background_color, 'layout_mode': settings.layout_mode }
+        'padding': settings.padding, 'background_color_hex': settings.background_color, 
+        'layout_mode': settings.layout_mode, 'logger': logger } # Pass logger to image_grid
     if settings.layout_mode == "grid": grid_params['columns'] = settings.columns
     elif settings.layout_mode == "timeline":
         grid_params['target_row_height'] = settings.target_row_height
@@ -240,7 +276,7 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
 
     if settings.save_metadata_json:
         logger.info(f"  Generating metadata JSON...")
-        source_metadata_map = {meta['frame_path']: meta for meta in source_frame_metadata_list}
+        source_metadata_map = {meta['frame_path']: meta for meta in source_frame_metadata_list} # Use the potentially reduced list
         combined_thumbnails_metadata = []
         for layout_item in thumbnail_layout_data: 
             source_meta = source_metadata_map.get(layout_item['image_path'])
@@ -261,10 +297,12 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
                 final_thumb_meta_cleaned = {k: v for k, v in final_thumb_meta.items() if v is not None}
                 combined_thumbnails_metadata.append(final_thumb_meta_cleaned)
         
-        settings_dict_copy = vars(settings).copy() # Use 'settings' now
+        settings_dict_copy = vars(settings).copy() 
         settings_dict_copy['parsed_start_time_sec'] = start_time_sec
         settings_dict_copy['parsed_end_time_sec'] = end_time_sec
         if excluded_items_info_for_log : settings_dict_copy['processing_warnings_log'] = excluded_items_info_for_log
+        settings_dict_copy['actual_frames_in_print'] = len(items_for_grid_input)
+
 
         full_metadata = {
             'movieprint_image_filename': os.path.basename(final_movieprint_path),
@@ -278,30 +316,32 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
             logger.info(f"  Metadata JSON saved to {json_output_path}")
         except Exception as e: log_callback(f"  Error saving metadata JSON to {json_output_path}: {e}")
 
-    if cleanup_temp_dir_for_this_video:
+    if cleanup_temp_dir_for_this_video: # This will now leave selected frames if max_frames_for_print was used and some were removed
         try:
+            # If we did frame limiting and cleanup_temp_dir, the unselected ones are already gone.
+            # If no frame limiting, or if user specified temp_dir, this rmtree is fine.
+            # If frame limiting AND user specified temp_dir, we should NOT rmtree here.
+            # The current logic for cleanup_temp_dir_for_this_video is if *we* created it.
+            # The internal selective removal handles the case where we created it AND limited frames.
+            # So, this rmtree should now only remove the temp dir if it's truly temporary and contains only the selected frames.
             shutil.rmtree(temp_frames_output_folder)
             logger.info(f"  Successfully cleaned up temporary frames directory: {temp_frames_output_folder}")
         except Exception as e: log_callback(f"  Error during cleanup of temporary directory {temp_frames_output_folder}: {e}")
     return True, final_movieprint_path
 
 def execute_movieprint_generation(settings, logger, progress_callback=None):
-    """
-    Core logic for generating MoviePrints based on provided settings.
-    Designed to be callable from CLI or GUI.
-    """
     logger.info("Starting MoviePrint generation process...")
 
     video_files_to_process = discover_video_files(
-        settings.input_paths, 
-        settings.video_extensions, 
+        settings.input_paths,
+        settings.video_extensions,
         settings.recursive_scan,
-        log_callback=logger # Pass logger here
+        logger
     )
 
     if not video_files_to_process:
         logger.warning("No video files found to process. Please check your input paths and video extensions.")
-        return [], [] # Return empty lists for successful and failed operations
+        return [], []
 
     logger.info(f"\nFound {len(video_files_to_process)} video file(s) to process.")
 
@@ -321,7 +361,7 @@ def execute_movieprint_generation(settings, logger, progress_callback=None):
     total_videos = len(video_files_to_process)
     for i, video_path in enumerate(video_files_to_process):
         if progress_callback:
-            progress_callback(i, total_videos, video_path) # Current index, total, current file
+            progress_callback(i, total_videos, video_path)
 
         effective_output_name = ""
         if is_single_file_direct_input and settings.output_filename:
@@ -331,7 +371,7 @@ def execute_movieprint_generation(settings, logger, progress_callback=None):
             effective_output_name = f"{base}{settings.output_filename_suffix}.{output_print_format}"
         
         try:
-            success, message_or_path = process_single_video(video_path, settings, effective_output_name, log_callback=logger)
+            success, message_or_path = process_single_video(video_path, settings, effective_output_name, logger)
             if success: 
                 successful_ops.append({'video': video_path, 'output': message_or_path})
             else: 
@@ -340,7 +380,7 @@ def execute_movieprint_generation(settings, logger, progress_callback=None):
             logger.exception(f"CRITICAL UNHANDLED ERROR processing {video_path}: {e}")
             failed_ops.append({'video': video_path, 'reason': f"Unexpected critical error: {str(e)}"})
     
-    if progress_callback: # Final progress update
+    if progress_callback: 
         progress_callback(total_videos, total_videos, "Batch completed")
 
     return successful_ops, failed_ops
@@ -351,8 +391,7 @@ def main():
         description="Create MoviePrints from video files or directories.",
         formatter_class=argparse.RawTextHelpFormatter
     )
-    # (Argument definitions remain exactly the same as the previous version)
-
+    
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)
     logger.info("Logging initialized.")
@@ -381,6 +420,8 @@ def main():
     layout_group = parser.add_argument_group("Layout Options")
     layout_group.add_argument("--layout_mode", type=str, default="grid", choices=["grid", "timeline"], help="Layout mode (default: grid).")
     layout_group.add_argument("--columns", type=int, default=5, help="For 'grid' layout: number of columns (default: 5).")
+    # --- NEW CLI ARG ---
+    layout_group.add_argument("--max_frames_for_print", type=int, default=None, help="For 'grid' layout: Target maximum number of frames in the final print. Samples down if extraction yields more.")
     layout_group.add_argument("--target_row_height", type=int, default=100, help="For 'timeline' layout: row height (default: 100).")
     layout_group.add_argument("--output_image_width", type=int, default=1200, help="For 'timeline' layout: output image width (default: 1200).")
 
@@ -405,8 +446,6 @@ def main():
              status_msg = f"Processing file {current}/{total} ({percent:.1f}%): {os.path.basename(filename)}" if current < total else f"Batch completed {current}/{total}."
              print(status_msg, end='\r' if current < total else '\n')
 
-
-    # Validations (remain the same)
     if args.extraction_mode == "interval":
         if args.interval_seconds is None and args.interval_frames is None:
             parser.error("For --extraction_mode 'interval', --interval_seconds or --interval_frames required.")
@@ -415,27 +454,28 @@ def main():
         if args.exclude_frames: parser.error("--exclude_frames only with --extraction_mode 'interval'.")
     if args.layout_mode == "timeline" and args.extraction_mode != "shot": 
         parser.error("--layout_mode 'timeline' requires --extraction_mode 'shot'.")
+    if args.layout_mode == "timeline" and args.max_frames_for_print is not None:
+        logger.warning("--max_frames_for_print is ignored for 'timeline' layout mode.")
+        args.max_frames_for_print = None # Ensure it's not used for timeline
 
-    # Call the core logic function
     successful_ops, failed_ops = execute_movieprint_generation(
         settings=args, 
-        log_callback=logger,
+        logger=logger,
         progress_callback=cli_progress_callback
     )
 
-    # Print summary from the results of execute_movieprint_generation
-    cli_log_callback("\n--- CLI Batch Processing Summary ---") # Use log_callback for consistency
+    logger.info("\n--- CLI Batch Processing Summary ---")
     if successful_ops:
-        cli_log_callback(f"\nSuccessfully processed {len(successful_ops)} video(s):")
-        for item in successful_ops: cli_log_callback(f"  - Input: {item['video']}\n    Output: {item['output']}")
+        logger.info(f"\nSuccessfully processed {len(successful_ops)} video(s):")
+        for item in successful_ops: logger.info(f"  - Input: {item['video']}\n    Output: {item['output']}")
     else: logger.info("No videos processed successfully.")
     
     if failed_ops:
-        cli_log_callback(f"\nFailed to process {len(failed_ops)} video(s):")
-        for item in failed_ops: cli_log_callback(f"  - Input: {item['video']}\n    Reason: {item['reason']}")
-    elif successful_ops: cli_log_callback("\nAll identified videos processed without reported failures.")
+        logger.info(f"\nFailed to process {len(failed_ops)} video(s):")
+        for item in failed_ops: logger.info(f"  - Input: {item['video']}\n    Reason: {item['reason']}")
+    elif successful_ops: logger.info("\nAll identified videos processed without reported failures.")
     
-    cli_log_callback("\nCLI movieprint creation process finished.")
+    logger.info("\nCLI movieprint creation process finished.")
 
 if __name__ == "__main__":
     main()
