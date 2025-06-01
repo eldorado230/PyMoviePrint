@@ -92,6 +92,7 @@ class MoviePrintApp:
         self.temp_dir_var = tk.StringVar() # For custom temp directory
         self.haar_cascade_xml_var = tk.StringVar()
         self.max_frames_for_print_var = tk.StringVar(value="100")
+        self.target_thumbnail_width_var = tk.StringVar(value="") # Or a default like "320"
 
         # --- Load persistent settings ---
         self._load_persistent_settings() # << NEW CALL
@@ -131,6 +132,7 @@ class MoviePrintApp:
                     # Load other StringVars if you want them to be persistent
                     self.max_frames_for_print_var.set(settings.get("max_frames_for_print", "100"))
                     self.num_columns_var.set(settings.get("num_columns", "5"))
+                    self.target_thumbnail_width_var.set(settings.get("target_thumbnail_width", "")) # Or "320"
                     self.interval_seconds_var.set(settings.get("interval_seconds", "5.0"))
                     # Load commonly adjusted layout and operational settings (with defaults)
                     self.layout_mode_var.set(settings.get("layout_mode", "grid"))
@@ -148,6 +150,7 @@ class MoviePrintApp:
             "custom_temp_dir": self.temp_dir_var.get(),
             "max_frames_for_print": self.max_frames_for_print_var.get(),
             "num_columns": self.num_columns_var.get(),
+            "target_thumbnail_width": self.target_thumbnail_width_var.get(),
             "interval_seconds": self.interval_seconds_var.get(),
             # Save commonly adjusted layout and operational settings
             "layout_mode": self.layout_mode_var.get(),
@@ -287,6 +290,12 @@ class MoviePrintApp:
         self.num_columns_entry = ttk.Entry(self.grid_options_frame, textvariable=self.num_columns_var, width=10)
         self.num_columns_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
         Tooltip(self.num_columns_entry, "Number of columns for 'grid' layout.")
+
+        lbl_target_thumb_w = ttk.Label(self.grid_options_frame, text="Target Thumbnail Width (px):")
+        lbl_target_thumb_w.grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        self.target_thumbnail_width_entry = ttk.Entry(self.grid_options_frame, textvariable=self.target_thumbnail_width_var, width=10)
+        self.target_thumbnail_width_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        Tooltip(self.target_thumbnail_width_entry, "For 'grid' layout: desired width for individual thumbnails (e.g., 320).\nOverrides automatic sizing. Cell height adjusts to aspect ratios.")
         
         self.timeline_options_frame = ttk.Frame(tab)
         self.timeline_options_frame.grid(row=3, column=0, columnspan=2, sticky=tk.EW, pady=3) 
@@ -537,10 +546,24 @@ class MoviePrintApp:
                     messagebox.showerror("Input Error", "Max Frames for Print must be a positive number if set.")
                     return
             else:
-                settings.max_frames_for_print = None 
+                settings.max_frames_for_print = None
+
+            target_thumb_w_str = self.target_thumbnail_width_var.get()
+            if target_thumb_w_str and target_thumb_w_str.strip():
+                settings.target_thumbnail_width = int(target_thumb_w_str)
+                if settings.target_thumbnail_width <= 0:
+                    messagebox.showerror("Input Error", "Target Thumbnail Width must be a positive integer if set.")
+                    return
+            else:
+                settings.target_thumbnail_width = None
 
         except ValueError as e: messagebox.showerror("Input Error", f"Invalid numeric value in settings: {e}"); return
         
+        # Validate target_thumbnail_width applicability (after parsing all mode vars)
+        if settings.layout_mode != "grid" and settings.target_thumbnail_width is not None:
+            self._gui_log_callback("Warning: Target Thumbnail Width is only applicable for 'grid' layout and will be ignored.")
+            # settings.target_thumbnail_width = None # Let backend handle ignoring if it's robust
+
         settings.background_color = self.background_color_var.get()
         settings.frame_format = self.frame_format_var.get()
         settings.save_metadata_json = self.save_metadata_json_var.get()
