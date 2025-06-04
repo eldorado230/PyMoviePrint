@@ -71,62 +71,61 @@ def extract_frames(video_path, output_folder, logger,
 
 
     saved_frame_count = 0
-    # Adjust next_extraction_time_sec if start_time_sec is provided.
-    # The first frame to consider is at or after start_time_sec.
-    next_extraction_time_sec = effective_start_time_sec 
-    
-    # For frame-based interval, we need to count frames from the effective start.
-    frames_processed_in_segment = 0 
 
-    while True:
-        # Read frame before checking time to ensure cap.get(cv2.CAP_PROP_POS_MSEC) is up-to-date
-        ret, frame = cap.read() 
-        current_timestamp_msec = cap.get(cv2.CAP_PROP_POS_MSEC) # Get current timestamp *after* read
-        current_timestamp_sec = current_timestamp_msec / 1000.0
+    segment_end_sec = end_time_sec if end_time_sec is not None else video_duration_sec
 
-        if not ret: # End of video or read error
-            break 
-        
-        # Stop if current_timestamp_sec exceeds end_time_sec (if specified)
-        if end_time_sec is not None and current_timestamp_sec > end_time_sec:
-            logger.info(f"  Reached end time ({end_time_sec:.2f}s). Stopping extraction.")
-            break
-        
-        # Determine current frame number relative to video start (for metadata)
-        # CAP_PROP_POS_FRAMES can be unreliable; calculate from timestamp if possible.
-        current_frame_num_abs = int(current_timestamp_sec * fps) if fps > 0 else int(cap.get(cv2.CAP_PROP_POS_FRAMES))
-
-        process_this_frame = False
-        if interval_seconds is not None:
-            if current_timestamp_sec >= next_extraction_time_sec:
-                process_this_frame = True
-                while current_timestamp_sec >= next_extraction_time_sec : # Ensure next extraction time is in the future
-                    next_extraction_time_sec += interval_seconds
-        elif interval_frames is not None:
-            # For interval_frames, ensure we are past start_time_sec if specified
-            if current_timestamp_sec >= effective_start_time_sec:
-                if frames_processed_in_segment % interval_frames == 0:
-                    process_this_frame = True
-        
-        if process_this_frame:
-            output_filename = f"frame_{saved_frame_count:05d}_absFN{current_frame_num_abs}.{output_format.lower()}"
+    if interval_seconds is not None:
+        next_time = effective_start_time_sec
+        while next_time <= segment_end_sec:
+            cap.set(cv2.CAP_PROP_POS_MSEC, next_time * 1000)
+            ret, frame = cap.read()
+            if not ret:
+                break
+            frame_number = int(cap.get(cv2.CAP_PROP_POS_FRAMES))
+            output_filename = f"frame_{saved_frame_count:05d}_absFN{frame_number}.{output_format.lower()}"
             output_path = os.path.join(output_folder, output_filename)
             try:
                 cv2.imwrite(output_path, frame)
                 extracted_frame_info.append({
                     'frame_path': output_path,
-                    'frame_number': current_frame_num_abs, # Absolute frame number
-                    'timestamp_sec': round(current_timestamp_sec, 3),
+                    'frame_number': frame_number,
+                    'timestamp_sec': round(frame_number / fps, 3),
                     'video_filename': video_filename
                 })
-                logger.info(f"Saved frame {saved_frame_count+1} (AbsFrame: {current_frame_num_abs}, Time: {current_timestamp_sec:.2f}s) as {output_path}")
+                logger.info(
+                    f"Saved frame {saved_frame_count+1} (AbsFrame: {frame_number}, Time: {frame_number / fps:.2f}s) as {output_path}")
                 saved_frame_count += 1
             except Exception as e:
-                logger.error(f"Error saving frame {current_frame_num_abs} to {output_path}: {e}")
-        
-        if current_timestamp_sec >= effective_start_time_sec: # Only count frames within the desired segment
-            frames_processed_in_segment += 1
+                logger.error(f"Error saving frame {frame_number} to {output_path}: {e}")
 
+            next_time += interval_seconds
+
+    elif interval_frames is not None:
+        start_frame = int(effective_start_time_sec * fps)
+        end_frame = int(segment_end_sec * fps)
+        frame_number = start_frame
+        while frame_number <= end_frame:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, frame_number)
+            ret, frame = cap.read()
+            if not ret:
+                break
+            output_filename = f"frame_{saved_frame_count:05d}_absFN{frame_number}.{output_format.lower()}"
+            output_path = os.path.join(output_folder, output_filename)
+            try:
+                cv2.imwrite(output_path, frame)
+                extracted_frame_info.append({
+                    'frame_path': output_path,
+                    'frame_number': frame_number,
+                    'timestamp_sec': round(frame_number / fps, 3),
+                    'video_filename': video_filename
+                })
+                logger.info(
+                    f"Saved frame {saved_frame_count+1} (AbsFrame: {frame_number}, Time: {frame_number / fps:.2f}s) as {output_path}")
+                saved_frame_count += 1
+            except Exception as e:
+                logger.error(f"Error saving frame {frame_number} to {output_path}: {e}")
+
+            frame_number += interval_frames
 
     cap.release()
     logger.info(f"\nInterval-based extraction complete. Saved {saved_frame_count} frames.")
