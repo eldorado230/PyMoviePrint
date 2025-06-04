@@ -351,6 +351,7 @@ class MoviePrintApp:
         thread_logger.propagate = False
 
         temp_dir = tempfile.mkdtemp(prefix="movieprint_preview_")
+        cleanup = True
         try:
             start_sec = parse_time_to_seconds(self.start_time_var.get()) if self.start_time_var.get() else None
             end_sec = parse_time_to_seconds(self.end_time_var.get()) if self.end_time_var.get() else None
@@ -382,15 +383,24 @@ class MoviePrintApp:
 
             if success:
                 paths = [m['frame_path'] for m in meta_list]
-                self.queue.put(("preview_paths", paths))
+                self.queue.put(("preview_paths", {"paths": paths, "temp_dir": temp_dir}))
+                cleanup = False
             else:
                 self.queue.put(("log", "Thumbnail preview extraction failed."))
         except Exception as e:
             thread_logger.exception(f"Error during thumbnail preview generation: {e}")
         finally:
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            if cleanup:
+                shutil.rmtree(temp_dir, ignore_errors=True)
 
-    def _display_thumbnail_preview(self, image_paths):
+    def _display_thumbnail_preview(self, data):
+        if isinstance(data, dict):
+            image_paths = data.get("paths", [])
+            temp_dir = data.get("temp_dir")
+        else:
+            image_paths = data
+            temp_dir = None
+
         for widget in self.frame_thumbs_inner.winfo_children():
             widget.destroy()
         self.thumbnail_images.clear()
@@ -408,6 +418,10 @@ class MoviePrintApp:
                 self.queue.put(("log", f"Error loading preview image {path}: {e}"))
 
         self.canvas_thumbs.configure(scrollregion=self.canvas_thumbs.bbox("all"))
+
+        if temp_dir:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
 
     def _populate_extraction_tab(self, tab):
         tab.columnconfigure(1, weight=1)
