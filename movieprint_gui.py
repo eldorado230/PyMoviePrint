@@ -340,6 +340,7 @@ class MoviePrintApp:
         import tempfile
         import shutil
         from movieprint_maker import parse_time_to_seconds
+        import image_grid
 
         thread_logger = logging.getLogger(f"preview_thread_{threading.get_ident()}")
         thread_logger.setLevel(logging.INFO)
@@ -382,9 +383,36 @@ class MoviePrintApp:
                 )
 
             if success:
-                paths = [m['frame_path'] for m in meta_list]
-                self.queue.put(("preview_paths", {"paths": paths, "temp_dir": temp_dir}))
-                cleanup = False
+                layout_mode = self.layout_mode_var.get()
+                grid_path = os.path.join(temp_dir, "preview_grid.jpg")
+                padding = int(self.padding_var.get()) if self.padding_var.get() else 0
+                grid_params = {
+                    'image_source_data': None,
+                    'output_path': grid_path,
+                    'padding': padding,
+                    'background_color_hex': self.background_color_var.get(),
+                    'layout_mode': layout_mode,
+                    'logger': thread_logger
+                }
+                if layout_mode == "timeline":
+                    grid_params['target_row_height'] = int(self.target_row_height_var.get()) if self.target_row_height_var.get() else 150
+                    grid_params['max_grid_width'] = int(self.output_image_width_var.get()) if self.output_image_width_var.get() else 1920
+                    grid_params['image_source_data'] = [
+                        {'image_path': m['frame_path'], 'width_ratio': float(m.get('duration_frames', 1))}
+                        for m in meta_list if m.get('duration_frames', 1) > 0
+                    ]
+                else:
+                    grid_params['columns'] = int(self.num_columns_var.get()) if self.num_columns_var.get() else 5
+                    ttw = self.target_thumbnail_width_var.get()
+                    grid_params['target_thumbnail_width'] = int(ttw) if ttw else None
+                    grid_params['image_source_data'] = [m['frame_path'] for m in meta_list]
+
+                grid_success, _ = image_grid.create_image_grid(**grid_params)
+                if grid_success:
+                    self.queue.put(("preview_grid", {"grid_path": grid_path, "temp_dir": temp_dir}))
+                    cleanup = False
+                else:
+                    self.queue.put(("log", "Thumbnail preview grid creation failed."))
             else:
                 self.queue.put(("log", "Thumbnail preview extraction failed."))
         except Exception as e:
@@ -395,27 +423,30 @@ class MoviePrintApp:
 
     def _display_thumbnail_preview(self, data):
         if isinstance(data, dict):
-            image_paths = data.get("paths", [])
+            grid_path = data.get("grid_path")
             temp_dir = data.get("temp_dir")
         else:
-            image_paths = data
+            grid_path = data
             temp_dir = None
 
         for widget in self.frame_thumbs_inner.winfo_children():
             widget.destroy()
         self.thumbnail_images.clear()
 
-        for path in image_paths:
+        if grid_path and os.path.exists(grid_path):
             try:
-                img = Image.open(path)
-                img.thumbnail((160, 160), Image.Resampling.LANCZOS)
+                img = Image.open(grid_path)
+                max_w = 720
+                if img.width > max_w:
+                    ratio = max_w / img.width
+                    img = img.resize((max_w, int(img.height * ratio)), Image.Resampling.LANCZOS)
                 photo = ImageTk.PhotoImage(img)
                 self.thumbnail_images.append(photo)
                 lbl = ttk.Label(self.frame_thumbs_inner, image=photo)
-                lbl.pack(side=tk.LEFT, padx=2, pady=2)
+                lbl.pack(padx=2, pady=2)
                 img.close()
             except Exception as e:
-                self.queue.put(("log", f"Error loading preview image {path}: {e}"))
+                self.queue.put(("log", f"Error loading preview grid {grid_path}: {e}"))
 
         self.canvas_thumbs.configure(scrollregion=self.canvas_thumbs.bbox("all"))
 
@@ -820,7 +851,7 @@ class MoviePrintApp:
                 elif message_type == "state":
                     if data == "enable_button": self.generate_button.config(state="normal")
                     elif data == "disable_button": self.generate_button.config(state="disabled")
-                elif message_type == "preview_paths":
+                elif message_type == "preview_grid":
                     self._display_thumbnail_preview(data)
                 self.root.update_idletasks()
         except queue.Empty: pass
