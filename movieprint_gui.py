@@ -7,6 +7,7 @@ import threading
 import queue
 import cv2
 import json # << NEW IMPORT for saving/loading settings
+import video_processing
 from version import __version__
 from tkinterdnd2 import DND_FILES, TkinterDnD
 from PIL import ImageTk, Image
