@@ -17,7 +17,7 @@ Current version: **1.0.0**
     *   **Grid Layout**: Arranges thumbnails in a standard grid.
     *   **Timeline Layout**: Arranges thumbnails proportionally to shot duration (requires shot detection mode).
 *   **Customizable Grid Layout**:
-    *   Define the number of columns.
+    *   Define the number of columns or rows.
     *   Set a target width for individual thumbnails (overrides automatic sizing).
     *   Limit the maximum number of frames to include in the print.
 *   **Customizable Timeline Layout**:
@@ -216,6 +216,10 @@ Below is a summary of the available command-line options, grouped by category.
     *   Type: int
     *   Default: `5`
     *   Description: For 'grid' layout: number of columns for thumbnails.
+*   `--rows NUM_ROWS`
+    *   Type: int
+    *   Default: None
+    *   Description: For 'grid' layout: number of rows. Overrides columns when set.
 *   `--target_thumbnail_width WIDTH_PX`
     *   Type: int
     *   Default: None
