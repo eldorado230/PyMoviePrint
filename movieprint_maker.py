@@ -4,10 +4,11 @@ import os
 import shutil
 import tempfile
 import glob
-import json 
-import re 
-import cv2 
+import json
+import re
+import cv2
 import math # For ceil, for frame selection
+from version import __version__
 
 try:
     import video_processing
@@ -393,6 +394,7 @@ def main():
         description="Create MoviePrints from video files or directories.",
         formatter_class=argparse.RawTextHelpFormatter
     )
+    parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
     
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)
