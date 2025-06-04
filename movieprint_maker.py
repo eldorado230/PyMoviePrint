@@ -298,10 +298,13 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
     logger.info(f"  Generating MoviePrint ({settings.layout_mode} layout) -> {final_movieprint_path}")
     
     grid_params = { 'image_source_data': items_for_grid_input, 'output_path': final_movieprint_path,
-        'padding': settings.padding, 'background_color_hex': settings.background_color, 
+        'padding': settings.padding, 'background_color_hex': settings.background_color,
         'layout_mode': settings.layout_mode, 'logger': logger } # Pass logger to image_grid
     if settings.layout_mode == "grid":
-        grid_params['columns'] = settings.columns
+        if getattr(settings, 'rows', None):
+            grid_params['rows'] = settings.rows
+        else:
+            grid_params['columns'] = settings.columns
         grid_params['target_thumbnail_width'] = getattr(settings, 'target_thumbnail_width', None)
     elif settings.layout_mode == "timeline":
         grid_params['target_row_height'] = settings.target_row_height
@@ -466,6 +469,8 @@ def main():
     layout_group = parser.add_argument_group("Layout Options")
     layout_group.add_argument("--layout_mode", type=str, default="grid", choices=["grid", "timeline"], help="Layout mode (default: grid).")
     layout_group.add_argument("--columns", type=int, default=5, help="For 'grid' layout: number of columns (default: 5).")
+    layout_group.add_argument("--rows", type=int, default=None,
+                              help="For 'grid' layout: number of rows. Overrides columns if provided.")
     layout_group.add_argument(
         "--target_thumbnail_width",
         type=int,
@@ -516,6 +521,15 @@ def main():
         # args.target_thumbnail_width = None # Optionally reset, or let image_grid handle it if it's robust
     if args.target_thumbnail_width is not None and args.target_thumbnail_width <= 0:
         parser.error("--target_thumbnail_width must be a positive integer.")
+
+    if args.rows is not None:
+        if args.layout_mode != "grid":
+            logger.warning("--rows is only applicable for 'grid' layout mode and will be ignored.")
+            args.rows = None
+        elif args.rows <= 0:
+            parser.error("--rows must be a positive integer.")
+        else:
+            args.columns = None
 
     if args.layout_mode == "timeline" and args.max_frames_for_print is not None:
         logger.warning("--max_frames_for_print is ignored for 'timeline' layout mode.")

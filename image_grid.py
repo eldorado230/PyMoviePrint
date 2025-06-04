@@ -241,7 +241,8 @@ def _create_timeline_view_grid(image_objects_with_paths_ratios, output_path,
 
 def create_image_grid(
     image_source_data, output_path, padding, logger, background_color_hex="#FFFFFF",
-    layout_mode="grid", columns=None, target_row_height=None, max_grid_width=None, target_thumbnail_width=None):
+    layout_mode="grid", columns=None, rows=None, target_row_height=None,
+    max_grid_width=None, target_thumbnail_width=None):
     thumbnail_layout_data = []
     if not image_source_data:
         logger.error("No image source data provided."); return False, thumbnail_layout_data
@@ -271,8 +272,12 @@ def create_image_grid(
             except Exception as e: logger.warning(f"Could not load image {img_path}: {e}. Skipping."); continue
 
     elif layout_mode == "grid":
-        if columns is None or columns <= 0:
-            logger.error("For grid mode, 'columns' must be a positive integer."); return False, thumbnail_layout_data
+        if (columns is None or columns <= 0) and (rows is None or rows <= 0):
+            logger.error("For grid mode, either 'columns' or 'rows' must be a positive integer.")
+            return False, thumbnail_layout_data
+        if rows is not None and rows > 0:
+            num_imgs = len(image_source_data)
+            columns = max(1, math.ceil(num_imgs / rows))
         if target_thumbnail_width is not None and not (isinstance(target_thumbnail_width, int) and target_thumbnail_width > 0):
             logger.error("For grid mode, if target_thumbnail_width is provided, it must be a positive integer."); return False, thumbnail_layout_data
         if not all(isinstance(p, str) for p in image_source_data):

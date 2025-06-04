@@ -1,6 +1,6 @@
 import tkinter as tk
 import logging
-from tkinter import ttk, filedialog, scrolledtext, messagebox
+from tkinter import ttk, filedialog, scrolledtext, messagebox, colorchooser
 import os
 import argparse
 import threading
@@ -84,6 +84,7 @@ class MoviePrintApp:
             "exclude_shots_var": "",
             "layout_mode_var": "grid",
             "num_columns_var": "5",
+            "num_rows_var": "",
             "target_row_height_var": "150", # Used in timeline
             "output_image_width_var": "1920", # Used in timeline
             "padding_var": "5",
@@ -116,6 +117,7 @@ class MoviePrintApp:
         self.exclude_shots_var = tk.StringVar(value=self.default_settings["exclude_shots_var"])
         self.layout_mode_var = tk.StringVar(value=self.default_settings["layout_mode_var"])
         self.num_columns_var = tk.StringVar(value=self.default_settings["num_columns_var"])
+        self.num_rows_var = tk.StringVar(value=self.default_settings["num_rows_var"])
         self.target_row_height_var = tk.StringVar(value=self.default_settings["target_row_height_var"])
         self.output_image_width_var = tk.StringVar(value=self.default_settings["output_image_width_var"])
         self.padding_var = tk.StringVar(value=self.default_settings["padding_var"])
@@ -175,6 +177,7 @@ class MoviePrintApp:
                     # Load other StringVars if you want them to be persistent
                     self.max_frames_for_print_var.set(settings.get("max_frames_for_print", "100"))
                     self.num_columns_var.set(settings.get("num_columns", "5"))
+                    self.num_rows_var.set(settings.get("num_rows", ""))
                     self.target_thumbnail_width_var.set(settings.get("target_thumbnail_width", "")) # Or "320"
                     self.interval_seconds_var.set(settings.get("interval_seconds", "5.0"))
                     self.max_output_filesize_kb_var.set(settings.get("max_output_filesize_kb", ""))
@@ -194,6 +197,7 @@ class MoviePrintApp:
             "custom_temp_dir": self.temp_dir_var.get(),
             "max_frames_for_print": self.max_frames_for_print_var.get(),
             "num_columns": self.num_columns_var.get(),
+            "num_rows": self.num_rows_var.get(),
             "target_thumbnail_width": self.target_thumbnail_width_var.get(),
             "interval_seconds": self.interval_seconds_var.get(),
             "max_output_filesize_kb": self.max_output_filesize_kb_var.get(),
@@ -406,7 +410,10 @@ class MoviePrintApp:
                         for m in meta_list if m.get('duration_frames', 1) > 0
                     ]
                 else:
-                    grid_params['columns'] = int(self.num_columns_var.get()) if self.num_columns_var.get() else 5
+                    if self.num_rows_var.get():
+                        grid_params['rows'] = int(self.num_rows_var.get())
+                    else:
+                        grid_params['columns'] = int(self.num_columns_var.get()) if self.num_columns_var.get() else 5
                     ttw = self.target_thumbnail_width_var.get()
                     grid_params['target_thumbnail_width'] = int(ttw) if ttw else None
                     grid_params['image_source_data'] = [m['frame_path'] for m in meta_list]
@@ -440,14 +447,13 @@ class MoviePrintApp:
         if grid_path and os.path.exists(grid_path):
             try:
                 img = Image.open(grid_path)
-                max_w = 720
-                if img.width > max_w:
-                    ratio = max_w / img.width
-                    img = img.resize((max_w, int(img.height * ratio)), Image.Resampling.LANCZOS)
                 photo = ImageTk.PhotoImage(img)
                 self.thumbnail_images.append(photo)
-                lbl = ttk.Label(self.frame_thumbs_inner, image=photo)
+                preview_win = tk.Toplevel(self.root)
+                preview_win.title("Thumbnail Preview")
+                lbl = ttk.Label(preview_win, image=photo)
                 lbl.pack(padx=2, pady=2)
+                preview_win.resizable(False, False)
                 img.close()
             except Exception as e:
                 self.queue.put(("log", f"Error loading preview grid {grid_path}: {e}"))
@@ -540,10 +546,16 @@ class MoviePrintApp:
         self.num_columns_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
         Tooltip(self.num_columns_entry, "Number of columns for 'grid' layout.")
 
+        lbl_rows = ttk.Label(self.grid_options_frame, text="Number of Rows:")
+        lbl_rows.grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        self.num_rows_entry = ttk.Entry(self.grid_options_frame, textvariable=self.num_rows_var, width=10)
+        self.num_rows_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        Tooltip(self.num_rows_entry, "Number of rows for 'grid' layout. Overrides columns if set.")
+
         lbl_target_thumb_w = ttk.Label(self.grid_options_frame, text="Target Thumbnail Width (px):")
-        lbl_target_thumb_w.grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        lbl_target_thumb_w.grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
         self.target_thumbnail_width_entry = ttk.Entry(self.grid_options_frame, textvariable=self.target_thumbnail_width_var, width=10)
-        self.target_thumbnail_width_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+        self.target_thumbnail_width_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
         Tooltip(self.target_thumbnail_width_entry, "For 'grid' layout: desired width for individual thumbnails (e.g., 320).\nOverrides automatic sizing. Cell height adjusts to aspect ratios.")
         
         self.timeline_options_frame = ttk.Frame(tab)
@@ -594,7 +606,10 @@ class MoviePrintApp:
         lbl_bg.grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
         self.bg_color_entry = ttk.Entry(tab, textvariable=self.background_color_var, width=10)
         self.bg_color_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
+        btn_pick_color = ttk.Button(tab, text="Pick...", command=self.pick_bg_color)
+        btn_pick_color.grid(row=1, column=2, padx=5, pady=5)
         Tooltip(self.bg_color_entry, "Hex color for the MoviePrint background (e.g., #FFFFFF or white).")
+        Tooltip(btn_pick_color, "Open color chooser dialog to select background color.")
         lbl_frame_fmt = ttk.Label(tab, text="Frame Format (temp):")
         lbl_frame_fmt.grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
         self.frame_format_combo = ttk.Combobox(tab, textvariable=self.frame_format_var, values=["jpg", "png"], state="readonly", width=8)
@@ -766,6 +781,11 @@ class MoviePrintApp:
         filepath = filedialog.askopenfilename(title=title_text, filetypes=file_types)
         if filepath: tk_var.set(filepath)
 
+    def pick_bg_color(self):
+        color = tk.colorchooser.askcolor(color=self.background_color_var.get())
+        if color[1]:
+            self.background_color_var.set(color[1])
+
     def handle_drop(self, event):
         data_string = event.data
         dropped_paths = []
@@ -893,7 +913,11 @@ class MoviePrintApp:
             settings.interval_seconds = float(self.interval_seconds_var.get()) if self.interval_seconds_var.get() else None
             settings.interval_frames = int(self.interval_frames_var.get()) if self.interval_frames_var.get() else None
             settings.shot_threshold = float(self.shot_threshold_var.get()) if self.shot_threshold_var.get() else 27.0
-            settings.columns = int(self.num_columns_var.get()) if self.num_columns_var.get() else 5
+            if self.num_rows_var.get():
+                settings.rows = int(self.num_rows_var.get())
+                settings.columns = None
+            else:
+                settings.columns = int(self.num_columns_var.get()) if self.num_columns_var.get() else 5
             settings.target_row_height = int(self.target_row_height_var.get()) if self.target_row_height_var.get() else 150
             settings.output_image_width = int(self.output_image_width_var.get()) if self.output_image_width_var.get() else 1920
             settings.padding = int(self.padding_var.get()) if self.padding_var.get() else 5
