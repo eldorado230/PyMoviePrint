@@ -86,7 +86,7 @@ Current version: **1.0.0**
     *   **Tabs for Settings**:
         *   **Extraction & Segment**: Choose extraction mode (Interval/Shot), set relevant parameters (interval duration, shot threshold), define start/end times, and specify frames/shots to exclude.
         *   **Layout**: Select layout mode (Grid/Timeline) and configure columns, thumbnail widths, row heights, max frames, etc.
-        *   **Thumbnail Preview**: Shows a preview of extracted thumbnails.
+        *   **Thumbnail Preview**: Displays a preview of the extracted thumbnails using the currently selected layout settings.
         *   **Batch & Output**: Configure output filename for single inputs, suffix for batch outputs, video extensions for scanning, and enable recursive scan.
         *   **Common & Advanced**: Set padding, background color, temporary frame format, rotation, custom temporary directory, face detection options, and metadata saving. Also contains the "Reset All Settings to Defaults" button.
     *   **Log Area**: Displays processing messages, warnings, and errors.
