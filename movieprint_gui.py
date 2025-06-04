@@ -446,14 +446,23 @@ class MoviePrintApp:
 
         if grid_path and os.path.exists(grid_path):
             try:
+                # Load the generated grid image
                 img = Image.open(grid_path)
+
+                # Determine available preview area within the canvas
+                self.root.update_idletasks()
+                max_w = self.canvas_thumbs.winfo_width() - 20
+                max_h = self.canvas_thumbs.winfo_height() - 20
+
+                if max_w > 0 and max_h > 0:
+                    img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+
                 photo = ImageTk.PhotoImage(img)
                 self.thumbnail_images.append(photo)
-                preview_win = tk.Toplevel(self.root)
-                preview_win.title("Thumbnail Preview")
-                lbl = ttk.Label(preview_win, image=photo)
+
+                lbl = ttk.Label(self.frame_thumbs_inner, image=photo)
                 lbl.pack(padx=2, pady=2)
-                preview_win.resizable(False, False)
+
                 img.close()
             except Exception as e:
                 self.queue.put(("log", f"Error loading preview grid {grid_path}: {e}"))
