@@ -7,6 +7,7 @@ import threading
 import queue
 import cv2
 import json # << NEW IMPORT for saving/loading settings
+from version import __version__
 from tkinterdnd2 import DND_FILES, TkinterDnD
 from PIL import ImageTk, Image
 
@@ -64,7 +65,7 @@ class Tooltip:
 class MoviePrintApp:
     def __init__(self):
         self.root = TkinterDnD.Tk()
-        self.root.title("MoviePrint Generator")
+        self.root.title(f"MoviePrint Generator v{__version__}")
         self.root.geometry("780x950")
 
         self._internal_input_paths = [] # Initialize for drag-and-drop and settings load
