@@ -309,18 +309,104 @@ class MoviePrintApp:
         # if the scroll happened over the intended widget.
 
     def start_thumbnail_preview_generation(self):
-        # Placeholder for future implementation
-        self.queue.put(("log", "Thumbnail preview generation initiated (placeholder)."))
-        # Example: Clear previous thumbnails
+        """Generate thumbnail previews based on current settings."""
+        self.queue.put(("log", "Thumbnail preview generation initiated."))
+
+        # Clear previous preview thumbnails
         for widget in self.frame_thumbs_inner.winfo_children():
             widget.destroy()
-        self.thumbnail_images.clear() # Clear stored PhotoImage objects
+        self.thumbnail_images.clear()
 
-        # Example: Add a dummy label
-        # lbl = ttk.Label(self.frame_thumbs_inner, text="Previewing...")
-        # lbl.pack(pady=20)
-        # self.canvas_thumbs.configure(scrollregion=self.canvas_thumbs.bbox("all"))
-        pass
+        if not hasattr(self, '_internal_input_paths') or not self._internal_input_paths:
+            input_paths_str = self.input_paths_var.get()
+            if input_paths_str:
+                self._internal_input_paths = [p.strip() for p in input_paths_str.split(';') if p.strip()]
+        if not self._internal_input_paths:
+            messagebox.showerror("Input Error", "Please select a video file for preview.")
+            return
+
+        if len(self._internal_input_paths) != 1 or not os.path.isfile(self._internal_input_paths[0]):
+            messagebox.showerror("Input Error", "Please select a single video file for thumbnail preview.")
+            return
+
+        video_path = self._internal_input_paths[0]
+
+        thread = threading.Thread(target=self._thumbnail_preview_thread, args=(video_path,))
+        thread.daemon = True
+        thread.start()
+
+    def _thumbnail_preview_thread(self, video_path):
+        import tempfile
+        import shutil
+        from movieprint_maker import parse_time_to_seconds
+
+        thread_logger = logging.getLogger(f"preview_thread_{threading.get_ident()}")
+        thread_logger.setLevel(logging.INFO)
+
+        queue_handler = QueueHandler(self.queue)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        queue_handler.setFormatter(formatter)
+        thread_logger.addHandler(queue_handler)
+        thread_logger.propagate = False
+
+        temp_dir = tempfile.mkdtemp(prefix="movieprint_preview_")
+        try:
+            start_sec = parse_time_to_seconds(self.start_time_var.get()) if self.start_time_var.get() else None
+            end_sec = parse_time_to_seconds(self.end_time_var.get()) if self.end_time_var.get() else None
+
+            if self.extraction_mode_var.get() == "interval":
+                interval_sec = float(self.interval_seconds_var.get()) if self.interval_seconds_var.get() else None
+                interval_frames = int(self.interval_frames_var.get()) if self.interval_frames_var.get() else None
+                success, meta_list = video_processing.extract_frames(
+                    video_path=video_path,
+                    output_folder=temp_dir,
+                    logger=thread_logger,
+                    interval_seconds=interval_sec,
+                    interval_frames=interval_frames,
+                    output_format="jpg",
+                    start_time_sec=start_sec,
+                    end_time_sec=end_sec,
+                )
+            else:
+                shot_thresh = float(self.shot_threshold_var.get()) if self.shot_threshold_var.get() else 27.0
+                success, meta_list = video_processing.extract_shot_boundary_frames(
+                    video_path=video_path,
+                    output_folder=temp_dir,
+                    logger=thread_logger,
+                    output_format="jpg",
+                    detector_threshold=shot_thresh,
+                    start_time_sec=start_sec,
+                    end_time_sec=end_sec,
+                )
+
+            if success:
+                paths = [m['frame_path'] for m in meta_list]
+                self.queue.put(("preview_paths", paths))
+            else:
+                self.queue.put(("log", "Thumbnail preview extraction failed."))
+        except Exception as e:
+            thread_logger.exception(f"Error during thumbnail preview generation: {e}")
+        finally:
+            shutil.rmtree(temp_dir, ignore_errors=True)
+
+    def _display_thumbnail_preview(self, image_paths):
+        for widget in self.frame_thumbs_inner.winfo_children():
+            widget.destroy()
+        self.thumbnail_images.clear()
+
+        for path in image_paths:
+            try:
+                img = Image.open(path)
+                img.thumbnail((160, 160), Image.Resampling.LANCZOS)
+                photo = ImageTk.PhotoImage(img)
+                self.thumbnail_images.append(photo)
+                lbl = ttk.Label(self.frame_thumbs_inner, image=photo)
+                lbl.pack(side=tk.LEFT, padx=2, pady=2)
+                img.close()
+            except Exception as e:
+                self.queue.put(("log", f"Error loading preview image {path}: {e}"))
+
+        self.canvas_thumbs.configure(scrollregion=self.canvas_thumbs.bbox("all"))
 
     def _populate_extraction_tab(self, tab):
         tab.columnconfigure(1, weight=1)
@@ -719,6 +805,8 @@ class MoviePrintApp:
                 elif message_type == "state":
                     if data == "enable_button": self.generate_button.config(state="normal")
                     elif data == "disable_button": self.generate_button.config(state="disabled")
+                elif message_type == "preview_paths":
+                    self._display_thumbnail_preview(data)
                 self.root.update_idletasks()
         except queue.Empty: pass
         self.root.after(100, self.check_queue)

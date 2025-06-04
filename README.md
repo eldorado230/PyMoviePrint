@@ -86,7 +86,7 @@ Current version: **1.0.0**
     *   **Tabs for Settings**:
         *   **Extraction & Segment**: Choose extraction mode (Interval/Shot), set relevant parameters (interval duration, shot threshold), define start/end times, and specify frames/shots to exclude.
         *   **Layout**: Select layout mode (Grid/Timeline) and configure columns, thumbnail widths, row heights, max frames, etc.
-        *   **Thumbnail Preview**: (Under Development) Intended to show a preview of extracted thumbnails.
+        *   **Thumbnail Preview**: Shows a preview of extracted thumbnails.
         *   **Batch & Output**: Configure output filename for single inputs, suffix for batch outputs, video extensions for scanning, and enable recursive scan.
         *   **Common & Advanced**: Set padding, background color, temporary frame format, rotation, custom temporary directory, face detection options, and metadata saving. Also contains the "Reset All Settings to Defaults" button.
     *   **Log Area**: Displays processing messages, warnings, and errors.
@@ -272,10 +272,8 @@ Below is a summary of the available command-line options, grouped by category.
 The GUI saves common settings (like last used input/output paths, extraction parameters, layout choices, etc.) to a file named `movieprint_gui_settings.json` in the same directory as the application. These settings are automatically loaded when the GUI starts.
 
 ## Known Issues / Limitations
-*   The Live Thumbnail Preview feature in the GUI is currently under development and not yet functional.
-
+None at this time.
 ## Future Enhancements / Roadmap
-*   Fully functional Live Thumbnail Preview in the GUI.
 *   Ability for users to select/deselect specific thumbnails from the preview for inclusion/exclusion in the final print.
 *   More advanced timeline layout options (e.g., variable row heights, grouping).
 *   Integration of more sophisticated scene detection algorithms or options.
