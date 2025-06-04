@@ -33,6 +33,7 @@ Current version: **1.0.0**
 *   **Batch Processing**: Process multiple video files or entire directories.
     *   Recursive directory scanning option.
 *   **Output Customization**: Define custom output filenames or suffixes for batch operations.
+*   **File Size Targeting**: Optional CLI and GUI setting to limit the maximum size of the generated MoviePrint image.
 *   **GUI Enhancements**:
     *   Drag-and-Drop support for input files and directories.
     *   Dynamic recalculation of frame extraction interval when 'Max Frames for Print' changes for a single selected video.
@@ -88,7 +89,7 @@ Current version: **1.0.0**
         *   **Layout**: Select layout mode (Grid/Timeline) and configure columns, thumbnail widths, row heights, max frames, etc.
         *   **Thumbnail Preview**: Displays a preview of the extracted thumbnails using the currently selected layout settings.
         *   **Batch & Output**: Configure output filename for single inputs, suffix for batch outputs, video extensions for scanning, and enable recursive scan.
-        *   **Common & Advanced**: Set padding, background color, temporary frame format, rotation, custom temporary directory, face detection options, and metadata saving. Also contains the "Reset All Settings to Defaults" button.
+        *   **Common & Advanced**: Set padding, background color, temporary frame format, rotation, custom temporary directory, face detection options, metadata saving, and an optional maximum output file size. Also contains the "Reset All Settings to Defaults" button.
     *   **Log Area**: Displays processing messages, warnings, and errors.
     *   **Generate MoviePrint Button**: Starts the MoviePrint generation process with the current settings.
 
@@ -266,6 +267,10 @@ Below is a summary of the available command-line options, grouped by category.
     *   Default: `0`
     *   Choices: `0`, `90`, `180`, `270`
     *   Description: Rotate all thumbnails clockwise by the specified degrees.
+*   `--max_output_filesize_kb SIZE`
+    *   Type: int
+    *   Default: None
+    *   Description: Attempt to reduce the final MoviePrint image so its file size does not exceed this value in kilobytes. This corresponds to the "Max Output Filesize (KB)" option in the GUI.
 
 ## GUI Settings Persistence
 

@@ -101,7 +101,8 @@ class MoviePrintApp:
             "temp_dir_var": "",
             "haar_cascade_xml_var": "",
             "max_frames_for_print_var": "100",
-            "target_thumbnail_width_var": ""
+            "target_thumbnail_width_var": "",
+            "max_output_filesize_kb_var": ""
         }
 
         # --- Initialize Tk Variables using default_settings ---
@@ -134,6 +135,7 @@ class MoviePrintApp:
         self.max_frames_for_print_var = tk.StringVar(value=self.default_settings["max_frames_for_print_var"])
         self.max_frames_for_print_var.trace_add("write", self._handle_max_frames_change)
         self.target_thumbnail_width_var = tk.StringVar(value=self.default_settings["target_thumbnail_width_var"])
+        self.max_output_filesize_kb_var = tk.StringVar(value=self.default_settings["max_output_filesize_kb_var"])
 
         # --- Load persistent settings (will override defaults if settings file exists) ---
         self._load_persistent_settings()
@@ -175,6 +177,7 @@ class MoviePrintApp:
                     self.num_columns_var.set(settings.get("num_columns", "5"))
                     self.target_thumbnail_width_var.set(settings.get("target_thumbnail_width", "")) # Or "320"
                     self.interval_seconds_var.set(settings.get("interval_seconds", "5.0"))
+                    self.max_output_filesize_kb_var.set(settings.get("max_output_filesize_kb", ""))
                     # Load commonly adjusted layout and operational settings (with defaults)
                     self.layout_mode_var.set(settings.get("layout_mode", "grid"))
                     self.padding_var.set(settings.get("padding", "5"))
@@ -193,6 +196,7 @@ class MoviePrintApp:
             "num_columns": self.num_columns_var.get(),
             "target_thumbnail_width": self.target_thumbnail_width_var.get(),
             "interval_seconds": self.interval_seconds_var.get(),
+            "max_output_filesize_kb": self.max_output_filesize_kb_var.get(),
             # Save commonly adjusted layout and operational settings
             "layout_mode": self.layout_mode_var.get(),
             "padding": self.padding_var.get(),
@@ -624,9 +628,15 @@ class MoviePrintApp:
         self.detect_faces_check.grid(row=7, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
         Tooltip(self.detect_faces_check, "Enable face detection on thumbnails. This can be performance intensive.")
 
+        lbl_max_filesize = ttk.Label(tab, text="Max Output Filesize (KB):")
+        lbl_max_filesize.grid(row=8, column=0, sticky=tk.W, padx=5, pady=5)
+        self.max_output_filesize_entry = ttk.Entry(tab, textvariable=self.max_output_filesize_kb_var, width=10)
+        self.max_output_filesize_entry.grid(row=8, column=1, sticky=tk.W, padx=5, pady=5)
+        Tooltip(self.max_output_filesize_entry, "Attempt to reduce the final MoviePrint so its file size does not exceed this value. Leave blank for no limit.")
+
         # Add Reset to Defaults button
         btn_reset_defaults = ttk.Button(tab, text="Reset All Settings to Defaults", command=self.confirm_reset_all_settings)
-        btn_reset_defaults.grid(row=8, column=0, columnspan=3, sticky=tk.W, padx=5, pady=20) # columnspan to fit button text
+        btn_reset_defaults.grid(row=9, column=0, columnspan=3, sticky=tk.W, padx=5, pady=20) # columnspan to fit button text
         Tooltip(btn_reset_defaults, "Resets all settings in the GUI to their original default values. Input/Output paths are not reset.")
 
 
@@ -932,6 +942,18 @@ class MoviePrintApp:
         settings.recursive_scan = self.recursive_scan_var.get()
         settings.temp_dir = self.temp_dir_var.get() if self.temp_dir_var.get() else None
         settings.haar_cascade_xml = self.haar_cascade_xml_var.get() if self.haar_cascade_xml_var.get() else None
+        max_size_str = self.max_output_filesize_kb_var.get()
+        if max_size_str and max_size_str.strip():
+            try:
+                settings.max_output_filesize_kb = int(max_size_str)
+                if settings.max_output_filesize_kb <= 0:
+                    messagebox.showerror("Input Error", "Max Output Filesize must be a positive integer if set.")
+                    return
+            except ValueError:
+                messagebox.showerror("Input Error", "Max Output Filesize must be an integer if set.")
+                return
+        else:
+            settings.max_output_filesize_kb = None
 
         self.log_text.config(state="normal"); self.log_text.delete(1.0, tk.END); self.log_text.config(state="disabled")
         self.queue.put(("state", "disable_button"))

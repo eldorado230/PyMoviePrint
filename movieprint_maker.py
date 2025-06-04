@@ -9,6 +9,7 @@ import re
 import cv2
 import math # For ceil, for frame selection
 from version import __version__
+from PIL import Image
 
 try:
     import video_processing
@@ -56,6 +57,45 @@ def discover_video_files(input_sources, valid_extensions_str, recursive_scan, lo
                     if file_ext.lower() in valid_extensions: video_files_found.add(item_path)
         else: logger.warning(f"Input path '{abs_source_path}' not a file/directory. Skipping.")
     return sorted(list(video_files_found))
+
+def enforce_max_filesize(image_path, target_kb, logger):
+    if target_kb is None:
+        return
+    try:
+        current_kb = os.path.getsize(image_path) / 1024.0
+    except OSError as e:
+        logger.error(f"  Error checking file size for {image_path}: {e}")
+        return
+    if current_kb <= target_kb:
+        logger.info(f"  Output size {current_kb:.1f} KB already below target {target_kb} KB.")
+        return
+    try:
+        with Image.open(image_path) as img:
+            quality = 95
+            width, height = img.size
+            for _ in range(10):
+                scale = max(0.1, (target_kb / current_kb) ** 0.5)
+                new_w = max(1, int(width * scale))
+                new_h = max(1, int(height * scale))
+                img_resized = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                save_kwargs = {"optimize": True}
+                ext = os.path.splitext(image_path)[1].lower()
+                if ext in [".jpg", ".jpeg"]:
+                    save_kwargs["quality"] = quality
+                elif ext == ".png":
+                    save_kwargs["compress_level"] = 9
+                img_resized.save(image_path, **save_kwargs)
+                img_resized.close()
+                current_kb = os.path.getsize(image_path) / 1024.0
+                if current_kb <= target_kb:
+                    logger.info(f"  Adjusted output size to {current_kb:.1f} KB <= {target_kb} KB.")
+                    return
+                width, height = img_resized.size
+                if ext in [".jpg", ".jpeg"] and quality > 20:
+                    quality -= 5
+            logger.warning(f"  Could not reduce file below {target_kb} KB. Final size: {current_kb:.1f} KB.")
+    except Exception as e:
+        logger.error(f"  Error reducing file size for {image_path}: {e}")
 
 
 def process_single_video(video_file_path, settings, effective_output_filename, logger):
@@ -277,6 +317,8 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
     
     logger.info(f"  MoviePrint successfully saved to {final_movieprint_path}")
 
+    enforce_max_filesize(final_movieprint_path, settings.max_output_filesize_kb, logger)
+
     if settings.save_metadata_json:
         logger.info(f"  Generating metadata JSON...")
         source_metadata_map = {meta['frame_path']: meta for meta in source_frame_metadata_list} # Use the potentially reduced list
@@ -443,11 +485,13 @@ def main():
     common_group.add_argument("--temp_dir", type=str, default=None, help="Optional global temporary directory. Not auto-cleaned.")
     common_group.add_argument("--save_metadata_json", action="store_true", help="Save a JSON sidecar file with detailed metadata.")
     common_group.add_argument("--detect_faces", action="store_true", help="Enable face detection on thumbnails. Performance intensive.")
-    common_group.add_argument("--haar_cascade_xml", type=str, default=None, 
+    common_group.add_argument("--haar_cascade_xml", type=str, default=None,
                               help="Path to Haar Cascade XML file for face detection. \n"
                                    "If not provided, uses OpenCV's default 'haarcascade_frontalface_default.xml'.")
     common_group.add_argument("--rotate_thumbnails", type=int, default=0, choices=[0, 90, 180, 270],
                               help="Rotate all thumbnails by 0, 90, 180, or 270 degrees clockwise (default: 0).")
+    common_group.add_argument("--max_output_filesize_kb", type=int, default=None,
+                              help="Attempt to limit final MoviePrint file size to this value in kilobytes.")
 
     args = parser.parse_args()
     
