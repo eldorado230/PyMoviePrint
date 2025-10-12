@@ -671,8 +671,14 @@ class MoviePrintApp:
     def perform_reset_all_settings(self):
         self._gui_log_callback("Resetting all settings to defaults...")
 
+        # Define settings to skip
+        settings_to_skip = ["input_paths_var", "output_dir_var"]
+
         # Iterate through all the settings
         for var_key, default_value in self.default_settings.items():
+            if var_key in settings_to_skip:
+                continue # Skip resetting input and output paths
+
             try:
                 # Get the actual Tkinter variable instance (e.g., self.extraction_mode_var)
                 tk_var_instance = getattr(self, var_key)
@@ -682,11 +688,10 @@ class MoviePrintApp:
             except Exception as e:
                 self._gui_log_callback(f"Warning: Error resetting setting for '{var_key}': {e}")
 
-        # Also reset the internal list of paths based on the default value
-        self._internal_input_paths = []
+        # DO NOT reset self._internal_input_paths, as paths are preserved.
 
         self.update_options_visibility() # Refresh UI elements based on new (default) values
-        self._gui_log_callback("All settings have been reset to their default values.")
+        self._gui_log_callback("All settings (except paths) have been reset to their default values.")
 
 
     def _create_action_log_section(self, parent_frame):

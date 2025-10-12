@@ -29,12 +29,17 @@ class TestMoviePrintApp(unittest.TestCase):
         # Perform the reset
         app.confirm_reset_all_settings()
 
-        # Check that the settings are reset to their default values
-        self.assertEqual(app.input_paths_var.get(), app.default_settings["input_paths_var"])
-        self.assertEqual(app._internal_input_paths, [])
-        self.assertEqual(app.output_dir_var.get(), app.default_settings["output_dir_var"])
+        # Check that path settings are PRESERVED
+        self.assertEqual(app.input_paths_var.get(), "/some/test/path")
+        self.assertEqual(app._internal_input_paths, ["/some/test/path"])
+        self.assertEqual(app.output_dir_var.get(), "/some/output/path")
+
+        # Check that other settings are reset to their default values
         self.assertEqual(app.num_columns_var.get(), app.default_settings["num_columns_var"])
         self.assertEqual(app.padding_var.get(), app.default_settings["padding_var"])
+
+        # Destroy the app window to prevent the test from hanging
+        app.root.destroy()
 
 if __name__ == '__main__':
     unittest.main()
