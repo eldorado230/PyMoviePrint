@@ -671,22 +671,19 @@ class MoviePrintApp:
     def perform_reset_all_settings(self):
         self._gui_log_callback("Resetting all settings to defaults...")
 
-        # Explicitly reset input and output paths first
-        self.input_paths_var.set(self.default_settings.get("input_paths_var", ""))
-        self._internal_input_paths = [] # Clear the internal list of paths
-        self.output_dir_var.set(self.default_settings.get("output_dir_var", ""))
-
-        # Iterate through the rest of the settings
+        # Iterate through all the settings
         for var_key, default_value in self.default_settings.items():
-            if var_key not in ["input_paths_var", "output_dir_var"]: # Skip already handled ones
-                try:
-                    # Get the actual Tkinter variable instance (e.g., self.extraction_mode_var)
-                    tk_var_instance = getattr(self, var_key)
-                    tk_var_instance.set(default_value)
-                except AttributeError:
-                    self._gui_log_callback(f"Warning: Could not reset setting for '{var_key}' - variable not found.")
-                except Exception as e:
-                    self._gui_log_callback(f"Warning: Error resetting setting for '{var_key}': {e}")
+            try:
+                # Get the actual Tkinter variable instance (e.g., self.extraction_mode_var)
+                tk_var_instance = getattr(self, var_key)
+                tk_var_instance.set(default_value)
+            except AttributeError:
+                self._gui_log_callback(f"Warning: Could not reset setting for '{var_key}' - variable not found.")
+            except Exception as e:
+                self._gui_log_callback(f"Warning: Error resetting setting for '{var_key}': {e}")
+
+        # Also reset the internal list of paths based on the default value
+        self._internal_input_paths = []
 
         self.update_options_visibility() # Refresh UI elements based on new (default) values
         self._gui_log_callback("All settings have been reset to their default values.")
