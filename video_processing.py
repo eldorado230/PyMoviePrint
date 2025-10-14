@@ -1,7 +1,7 @@
 import cv2
 import logging
 import os
-import shutil 
+import shutil
 
 # Imports for PySceneDetect
 from scenedetect import open_video, SceneManager, FrameTimecode # Ensure FrameTimecode is imported
@@ -58,10 +58,10 @@ def extract_frames(video_path, output_folder, logger,
         # Seek video to start_time_sec
         cap.set(cv2.CAP_PROP_POS_MSEC, start_time_sec * 1000)
         logger.info(f"  Processing from {start_time_sec:.2f}s.")
-    
+
     if end_time_sec is not None and end_time_sec <= (start_time_sec or 0): # Ensure end_time is after start_time
         logger.error(f"End time ({end_time_sec:.2f}s) must be after start time ({(start_time_sec or 0):.2f}s)."); cap.release(); return False, extracted_frame_info
-    
+
     effective_start_time_sec = start_time_sec or 0
     # If end_time_sec is None, process till the end of the video.
 
@@ -180,15 +180,16 @@ def extract_shot_boundary_frames(video_path, output_folder, logger, output_forma
             effective_end_time = FrameTimecode(timecode=end_time_sec, fps=video_fps)
             logger.info(f"  Shot detection until {end_time_sec:.2f}s ({effective_end_time.get_timecode()}).")
 
-        # PySceneDetect's detect_scenes can take start_time and end_time directly.
+        # PySceneDetect's detect_scenes does not take start_time and end_time directly.
         scene_manager = SceneManager()
         scene_manager.add_detector(ContentDetector(threshold=detector_threshold))
-        
+
+        if effective_start_time or effective_end_time:
+            video_manager.set_duration(start=effective_start_time, end=effective_end_time)
+
         logger.info(f"Starting shot detection for '{video_path}' (Threshold: {detector_threshold})...")
         scene_manager.detect_scenes(
-            video=video_manager, 
-            start_time=effective_start_time, 
-            end_time=effective_end_time,
+            video=video_manager,
             show_progress=True
         )
         scene_list = scene_manager.get_scene_list()
@@ -232,7 +233,7 @@ def extract_shot_boundary_frames(video_path, output_folder, logger, output_forma
                     saved_frame_count += 1
                 except Exception as e: logger.error(f"Error saving frame {start_frame_abs} for shot {i+1}: {e}")
             else: logger.warning(f"Could not read frame {start_frame_abs} for shot {i+1}.")
-        
+
         logger.info(f"\nShot boundary frame extraction complete. Saved {saved_frame_count} frames.")
         return True, shot_meta_list
 
