@@ -2,6 +2,8 @@
 
 PyMoviePrint is a Python application that creates "movie prints," also known as contact sheets or thumbnail indexes, from your video files. It offers both a graphical user interface (GUI) for ease of use and a command-line interface (CLI) for scripting and batch processing.
 
+For a detailed guide on how to use all the features, please see the [User Guide](USER_GUIDE.md).
+
 Current version: **1.0.0**
 
 ## Features

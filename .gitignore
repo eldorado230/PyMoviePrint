@@ -3,3 +3,26 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+
+# Py-Win32-specific files
+*.pyw
+*.pyc
+*.pyo
+*.pyd
+*.pyi
+*.pyd.asc
+*.pyd.manifest
+*.pyd.sha256
+*.pyd.sha512
+*.pyd.md5
+*.pyd.sha1
+*.pyd.sha224
+*.pyd.sha384
+*.pyw.asc
+*.pyw.manifest
+*.pyw.sha256
+*.pyw.sha512
+*.pyw.md5
+*.pyw.sha1
+*.pyw.sha224
+*.pyw.sha384
