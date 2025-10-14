@@ -1,4 +1,5 @@
 @echo off
-cd /d C:\pyMoviePrint\PyMoviePrint
+cd /d "%~dp0"
+pip install -r requirements.txt
 python movieprint_gui.py
 pause
