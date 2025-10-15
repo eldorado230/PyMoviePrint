@@ -104,7 +104,8 @@ class MoviePrintApp:
             "haar_cascade_xml_var": "",
             "max_frames_for_print_var": "100",
             "target_thumbnail_width_var": "",
-            "max_output_filesize_kb_var": ""
+            "max_output_filesize_kb_var": "",
+            "preview_quality_var": 75,
         }
 
         # --- Initialize Tk Variables using default_settings ---
@@ -139,6 +140,7 @@ class MoviePrintApp:
         self.max_frames_for_print_var.trace_add("write", self._handle_max_frames_change)
         self.target_thumbnail_width_var = tk.StringVar(value=self.default_settings["target_thumbnail_width_var"])
         self.max_output_filesize_kb_var = tk.StringVar(value=self.default_settings["max_output_filesize_kb_var"])
+        self.preview_quality_var = tk.IntVar(value=self.default_settings["preview_quality_var"])
 
         # --- Load persistent settings (will override defaults if settings file exists) ---
         self._load_persistent_settings()
@@ -187,6 +189,7 @@ class MoviePrintApp:
                     self.padding_var.set(settings.get("padding", "5"))
                     self.background_color_var.set(settings.get("background_color", "#FFFFFF"))
                     self.extraction_mode_var.set(settings.get("extraction_mode", "interval"))
+                    self.preview_quality_var.set(settings.get("preview_quality", 75))
                     # ... and so on for any other settings you want to persist ...
         except Exception as e:
             print(f"Error loading persistent settings: {e}") # Or log to GUI queue if possible early
@@ -207,6 +210,7 @@ class MoviePrintApp:
             "padding": self.padding_var.get(),
             "background_color": self.background_color_var.get(),
             "extraction_mode": self.extraction_mode_var.get(),
+            "preview_quality": self.preview_quality_var.get(),
             # ... add any other settings from StringVars ...
         }
         try:
@@ -288,6 +292,22 @@ class MoviePrintApp:
         self.btn_save_thumbs = ttk.Button(button_frame, text="Save Thumbnails", command=self.save_thumbnails)
         self.btn_save_thumbs.pack(side=tk.LEFT, padx=5)
         Tooltip(self.btn_save_thumbs, "Save the generated thumbnails to a selected directory.")
+
+        # --- NEW Quality Slider ---
+        quality_frame = ttk.Frame(tab)
+        quality_frame.pack(pady=5, fill=tk.X, padx=10)
+        quality_frame.columnconfigure(1, weight=1) # Let the slider expand
+
+        lbl_quality = ttk.Label(quality_frame, text="Preview Quality:")
+        lbl_quality.grid(row=0, column=0, sticky=tk.W, padx=(0,5))
+        Tooltip(lbl_quality, "Adjust the quality (size) of the preview thumbnails.\nLower quality is faster. This does not affect the final MoviePrint.")
+
+        self.quality_slider = ttk.Scale(quality_frame, from_=10, to=100, orient=tk.HORIZONTAL, variable=self.preview_quality_var, command=lambda s: self.preview_quality_var.set(int(float(s))))
+        self.quality_slider.grid(row=0, column=1, sticky=tk.EW)
+
+        quality_value_label = ttk.Label(quality_frame, textvariable=self.preview_quality_var, width=4)
+        quality_value_label.grid(row=0, column=2, sticky=tk.E, padx=(5,0))
+        # --- END NEW ---
 
         preview_outer_frame = ttk.LabelFrame(tab, text="Thumbnails", padding="10")
         preview_outer_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -461,7 +481,31 @@ class MoviePrintApp:
                     grid_params['image_source_data'] = [m['frame_path'] for m in meta_list]
 
                 grid_success, _ = image_grid.create_image_grid(**grid_params)
+
                 if grid_success:
+                    # --- NEW: Resize based on quality slider ---
+                    quality_percent = self.preview_quality_var.get()
+                    if quality_percent < 100:
+                        try:
+                            with Image.open(grid_path) as img:
+                                scale_factor = quality_percent / 100.0
+                                new_width = int(img.width * scale_factor)
+                                new_height = int(img.height * scale_factor)
+                                # Ensure dimensions are at least 1x1
+                                if new_width < 1: new_width = 1
+                                if new_height < 1: new_height = 1
+
+                                self.queue.put(("log", f"Resizing preview grid to {quality_percent}% quality ({new_width}x{new_height})..."))
+                                # Use a high-quality downsampling filter
+                                resized_img = img.resize((new_width, new_height), Image.Resampling.LANCZOS)
+
+                                # Overwrite the original grid path with the resized version for the preview
+                                resized_img.save(grid_path)
+                                resized_img.close()
+                        except Exception as resize_e:
+                            self.queue.put(("log", f"Warning: Could not resize preview grid for quality setting: {resize_e}"))
+                    # --- END NEW ---
+
                     self.queue.put(("preview_grid", {"grid_path": grid_path, "temp_dir": temp_dir}))
                     cleanup = False
                 else:
@@ -719,7 +763,7 @@ class MoviePrintApp:
         # Iterate through all the settings
         for var_key, default_value in self.default_settings.items():
             if var_key in settings_to_skip:
-                continue # Skip resetting input and output paths
+                continue  # Skip resetting input and output paths
 
             try:
                 # Get the actual Tkinter variable instance (e.g., self.extraction_mode_var)
@@ -811,15 +855,16 @@ class MoviePrintApp:
             self.input_paths_var.set("; ".join(self._internal_input_paths))
             if len(self._internal_input_paths) == 1 and os.path.isfile(self._internal_input_paths[0]):
                 self.root.after(200, lambda p=self._internal_input_paths[0]: self._auto_calculate_and_set_interval(p))
+                self.start_thumbnail_preview_generation()
             else:
-                self.interval_seconds_var.set("5.0") 
+                self.interval_seconds_var.set("5.0")
                 self.queue.put(("log", "Multiple files/directory selected. Manual interval setting recommended."))
         else:
             dir_path = filedialog.askdirectory(title="Select Directory of Videos")
             if dir_path:
                 self._internal_input_paths = [dir_path]
                 self.input_paths_var.set(dir_path)
-                self.interval_seconds_var.set("5.0") 
+                self.interval_seconds_var.set("5.0")
                 self.queue.put(("log", "Directory selected. Manual interval setting recommended."))
 
     def browse_output_dir(self): 
@@ -902,6 +947,7 @@ class MoviePrintApp:
                 self.queue.put(("log", f"Drag & drop: Single file '{os.path.basename(self._internal_input_paths[0])}' selected."))
                 # Delay slightly to allow GUI to update input field text before potential modal dialogs from auto-calc
                 self.root.after(100, lambda p=self._internal_input_paths[0]: self._auto_calculate_and_set_interval(p))
+                self.start_thumbnail_preview_generation()
             else:
                 self.interval_seconds_var.set("5.0") # Reset interval for multiple files
                 self.queue.put(("log", f"Drag & drop: Multiple files ({len(self._internal_input_paths)}) selected. Manual interval recommended (reset to 5.0s)."))
