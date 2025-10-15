@@ -71,6 +71,7 @@ class MoviePrintApp:
 
         self._internal_input_paths = [] # Initialize for drag-and-drop and settings load
         self.thumbnail_images = [] # To store PhotoImage objects for preview
+        self.thumbnail_paths = []
 
         # --- Define Default Settings Store ---
         self.default_settings = {
@@ -276,9 +277,17 @@ class MoviePrintApp:
     def _populate_preview_tab(self, tab):
         tab.columnconfigure(0, weight=1) # Make the preview area expand
 
-        self.btn_preview_thumbs = ttk.Button(tab, text="Preview Extracted Thumbnails", command=self.start_thumbnail_preview_generation)
-        self.btn_preview_thumbs.pack(pady=10)
+        # Create a frame for the buttons
+        button_frame = ttk.Frame(tab)
+        button_frame.pack(pady=10)
+
+        self.btn_preview_thumbs = ttk.Button(button_frame, text="Preview Extracted Thumbnails", command=self.start_thumbnail_preview_generation)
+        self.btn_preview_thumbs.pack(side=tk.LEFT, padx=5)
         Tooltip(self.btn_preview_thumbs, "Generate and display a preview of thumbnails based on current extraction settings for the selected video(s).")
+
+        self.btn_save_thumbs = ttk.Button(button_frame, text="Save Thumbnails", command=self.save_thumbnails)
+        self.btn_save_thumbs.pack(side=tk.LEFT, padx=5)
+        Tooltip(self.btn_save_thumbs, "Save the generated thumbnails to a selected directory.")
 
         preview_outer_frame = ttk.LabelFrame(tab, text="Thumbnails", padding="10")
         preview_outer_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
@@ -325,6 +334,7 @@ class MoviePrintApp:
         for widget in self.frame_thumbs_inner.winfo_children():
             widget.destroy()
         self.thumbnail_images.clear()
+        self.thumbnail_paths = []
 
         if not hasattr(self, '_internal_input_paths') or not self._internal_input_paths:
             input_paths_str = self.input_paths_var.get()
@@ -343,6 +353,37 @@ class MoviePrintApp:
         thread = threading.Thread(target=self._thumbnail_preview_thread, args=(video_path,))
         thread.daemon = True
         thread.start()
+
+    def save_thumbnails(self):
+        """Saves the generated thumbnails to a user-selected directory."""
+        if not self.thumbnail_paths:
+            messagebox.showinfo("Save Thumbnails", "No thumbnails to save. Please generate a preview first.")
+            return
+
+        output_dir = filedialog.askdirectory(title="Select Directory to Save Thumbnails")
+        if not output_dir:
+            return
+
+        thread = threading.Thread(target=self._save_thumbnails_thread, args=(output_dir,))
+        thread.daemon = True
+        thread.start()
+
+    def _save_thumbnails_thread(self, output_dir):
+        from image_grid import save_thumbnails
+        thread_logger = logging.getLogger(f"save_thumbs_thread_{threading.get_ident()}")
+        thread_logger.setLevel(logging.INFO)
+        queue_handler = QueueHandler(self.queue)
+        formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+        queue_handler.setFormatter(formatter)
+        thread_logger.addHandler(queue_handler)
+        thread_logger.propagate = False
+
+        self.queue.put(("log", f"Saving {len(self.thumbnail_paths)} thumbnails to {output_dir}..."))
+        success, saved_paths = save_thumbnails(self.thumbnail_paths, output_dir, thread_logger)
+        if success:
+            self.queue.put(("log", f"Successfully saved {len(saved_paths)} thumbnails."))
+        else:
+            self.queue.put(("log", "Failed to save thumbnails."))
 
     def _thumbnail_preview_thread(self, video_path):
         import tempfile
@@ -391,6 +432,7 @@ class MoviePrintApp:
                 )
 
             if success:
+                self.thumbnail_paths = [m['frame_path'] for m in meta_list]
                 layout_mode = self.layout_mode_var.get()
                 grid_path = os.path.join(temp_dir, "preview_grid.jpg")
                 padding = int(self.padding_var.get()) if self.padding_var.get() else 0
