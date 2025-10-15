@@ -2,6 +2,50 @@ from PIL import Image, ImageDraw, ImageColor
 import logging
 import os
 import math
+import shutil
+
+
+def save_thumbnails(thumbnail_paths, output_dir, logger):
+    """
+    Saves a list of thumbnail images to a specified directory.
+
+    :param thumbnail_paths: A list of paths to the thumbnail image files.
+    :param output_dir: The directory where the thumbnails will be saved.
+    :param logger: A logger instance for logging messages.
+    :return: A tuple (bool, list) indicating success and a list of saved thumbnail paths.
+    """
+    if not thumbnail_paths:
+        logger.warning("No thumbnail paths provided to save.")
+        return False, []
+
+    if not os.path.exists(output_dir):
+        try:
+            os.makedirs(output_dir)
+            logger.info(f"Created directory for saving thumbnails: {output_dir}")
+        except OSError as e:
+            logger.error(f"Error creating thumbnail output directory {output_dir}: {e}")
+            return False, []
+
+    saved_thumbnails = []
+    for thumb_path in thumbnail_paths:
+        try:
+            if os.path.exists(thumb_path):
+                filename = os.path.basename(thumb_path)
+                dest_path = os.path.join(output_dir, filename)
+                shutil.copy(thumb_path, dest_path)
+                saved_thumbnails.append(dest_path)
+            else:
+                logger.warning(f"Thumbnail not found, cannot save: {thumb_path}")
+        except Exception as e:
+            logger.error(f"Error saving thumbnail {thumb_path} to {output_dir}: {e}")
+
+    if saved_thumbnails:
+        logger.info(f"Successfully saved {len(saved_thumbnails)} thumbnails to {output_dir}")
+        return True, saved_thumbnails
+    else:
+        logger.error("Failed to save any thumbnails.")
+        return False, []
+
 
 def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, padding, background_color_rgb, logger, target_thumbnail_width=None, **kwargs):
     thumbnail_layout_data = []
