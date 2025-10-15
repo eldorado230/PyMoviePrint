@@ -141,6 +141,8 @@ class MoviePrintApp:
         self.thumbnail_images = [] # To store PhotoImage objects for preview
         self.thumbnail_paths = []
         self.queue = queue.Queue()
+        self.preview_window = None
+        self.preview_zoomable_canvas = None
 
         # --- Define Default Settings Store ---
         self.default_settings = {
@@ -304,6 +306,25 @@ class MoviePrintApp:
         self._save_persistent_settings()
         self.root.destroy()
 
+    def _create_preview_window(self):
+        if self.preview_window and self.preview_window.winfo_exists():
+            self.preview_window.lift()
+            return
+
+        self.preview_window = tk.Toplevel(self.root)
+        self.preview_window.title("Thumbnail Preview")
+        self.preview_window.geometry("800x600")
+
+        self.preview_zoomable_canvas = ZoomableCanvas(self.preview_window)
+        self.preview_zoomable_canvas.pack(fill=tk.BOTH, expand=True)
+
+        def on_preview_close():
+            self.preview_window.destroy()
+            self.preview_window = None
+            self.preview_zoomable_canvas = None
+
+        self.preview_window.protocol("WM_DELETE_WINDOW", on_preview_close)
+
     def _handle_max_frames_change(self, *args):
         # Check if a single video file is selected
         if hasattr(self, '_internal_input_paths') and \
@@ -395,15 +416,19 @@ class MoviePrintApp:
         preview_outer_frame.columnconfigure(0, weight=1)
 
         # Integrate the ZoomableCanvas
-        self.zoomable_canvas = ZoomableCanvas(preview_outer_frame)
-        self.zoomable_canvas.grid(row=0, column=0, sticky="nsew")
+        info_label = ttk.Label(preview_outer_frame,
+                               text="Preview will open in a new, resizable window.",
+                               justify=tk.CENTER,
+                               style="TLabel")
+        info_label.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 
     def start_thumbnail_preview_generation(self):
         """Generate thumbnail previews based on current settings."""
         self.queue.put(("log", "Thumbnail preview generation initiated."))
 
         # Clear previous preview thumbnails
-        self.zoomable_canvas.clear()
+        if self.preview_zoomable_canvas:
+            self.preview_zoomable_canvas.clear()
         self.thumbnail_images.clear() # This might be redundant if zoomable_canvas manages all image refs
         self.thumbnail_paths = []
 
@@ -591,7 +616,11 @@ class MoviePrintApp:
             grid_path = data
             temp_dir = None
 
-        self.zoomable_canvas.set_image(grid_path)
+        self._create_preview_window()
+        if self.preview_zoomable_canvas:
+            self.preview_zoomable_canvas.set_image(grid_path)
+        else:
+            self.queue.put(("log", "Error: Preview window not available to display image."))
 
         if temp_dir:
             import shutil
