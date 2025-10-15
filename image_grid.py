@@ -47,7 +47,7 @@ def save_thumbnails(thumbnail_paths, output_dir, logger):
         return False, []
 
 
-def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, padding, background_color_rgb, logger, target_thumbnail_width=None, **kwargs):
+def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, padding, background_color_rgb, logger, target_thumbnail_width=None, output_width=None, output_height=None, target_thumbnail_height=None, **kwargs):
     thumbnail_layout_data = []
     if not image_objects_with_paths:
         logger.error("Error (_create_fixed_column_grid): No image objects provided.")
@@ -71,18 +71,22 @@ def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, pa
                 logger.warning("Max scaled height was 0. Defaulting cell_h to 1 for non-empty image list.")
                 cell_h = 1 # Ensure cell_h is at least 1 if there are images
         else: # No images
-            cell_h = 1 # Default to 1 if no images, though this case might be handled by earlier checks
-
-        if cell_h == 0 and not image_objects: # If no images and calculation resulted in 0, use a sensible default or it was already handled.
-            # This path might be redundant given the check for image_objects above.
-            # If image_objects is empty, the loop for max_scaled_height isn't run.
-            # The grid dimensions will likely be just padding if no images.
-            # Let's assume earlier checks for empty image_objects handle termination.
-            # If we reach here with no images, cell_h might remain 0. Grid creation would be padding only.
-            # For safety, if image_objects is empty, cell_w and cell_h should result in a minimal grid (padding only).
-            # If image_objects is NOT empty but cell_h is 0 (e.g. all images zero width), we use fallback cell_h = 1.
-             pass # cell_h determined by logic above
-
+            cell_h = 1
+    elif target_thumbnail_height and isinstance(target_thumbnail_height, int) and target_thumbnail_height > 0:
+        cell_h = target_thumbnail_height
+        max_scaled_width = 0
+        if image_objects:
+            for img in image_objects:
+                if img.height > 0: # Avoid division by zero
+                    aspect_ratio = img.width / img.height
+                    scaled_width = int(target_thumbnail_height * aspect_ratio)
+                    max_scaled_width = max(max_scaled_width, scaled_width)
+            cell_w = max_scaled_width
+            if cell_w == 0: # Fallback if all images had zero height or other issues
+                logger.warning("Max scaled width was 0. Defaulting cell_w to 1 for non-empty image list.")
+                cell_w = 1
+        else: # No images
+            cell_w = 1
     else:
         max_thumb_width = 0
         max_thumb_height = 0
@@ -158,6 +162,10 @@ def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, pa
             current_x += cell_w + padding
 
     try:
+        if output_width and output_height:
+            logger.info(f"Resizing final grid to user-defined dimensions: {output_width}x{output_height}")
+            grid_image = grid_image.resize((output_width, output_height), Image.Resampling.LANCZOS)
+
         grid_image.save(output_path)
         logger.info(f"Fixed-column grid saved to {output_path}")
         return True, thumbnail_layout_data
@@ -286,7 +294,7 @@ def _create_timeline_view_grid(image_objects_with_paths_ratios, output_path,
 def create_image_grid(
     image_source_data, output_path, padding, logger, background_color_hex="#FFFFFF",
     layout_mode="grid", columns=None, rows=None, target_row_height=None,
-    max_grid_width=None, target_thumbnail_width=None):
+    max_grid_width=None, target_thumbnail_width=None, output_width=None, output_height=None, target_thumbnail_height=None):
     thumbnail_layout_data = []
     if not image_source_data:
         logger.error("No image source data provided."); return False, thumbnail_layout_data
@@ -348,7 +356,7 @@ def create_image_grid(
     # Pass **kwargs implicitly if they are expected by helpers, or remove if not used
     if layout_mode == "grid":
         success, thumbnail_layout_data = _create_fixed_column_grid(
-            processed_image_input, output_path, columns, padding, background_color_rgb, logger=logger, target_thumbnail_width=target_thumbnail_width
+            processed_image_input, output_path, columns, padding, background_color_rgb, logger=logger, target_thumbnail_width=target_thumbnail_width, output_width=output_width, output_height=output_height, target_thumbnail_height=target_thumbnail_height
         )
     elif layout_mode == "timeline":
         success, thumbnail_layout_data = _create_timeline_view_grid(

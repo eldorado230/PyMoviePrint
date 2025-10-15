@@ -63,6 +63,74 @@ class Tooltip:
         self.tooltip_window = None
 
 
+class ZoomableCanvas(ttk.Frame):
+    def __init__(self, master, **kwargs):
+        super().__init__(master, **kwargs)
+        self.canvas = tk.Canvas(self, background="#ECECEC")
+        self.canvas.grid(row=0, column=0, sticky="nsew")
+
+        # Create vertical and horizontal scrollbars
+        vsb = ttk.Scrollbar(self, orient="vertical", command=self.canvas.yview)
+        hsb = ttk.Scrollbar(self, orient="horizontal", command=self.canvas.xview)
+        self.canvas.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+
+        self.grid_rowconfigure(0, weight=1)
+        self.grid_columnconfigure(0, weight=1)
+
+        self.image_id = None
+        self.image = None
+        self.photo_image = None
+
+        # Bind events
+        self.canvas.bind("<ButtonPress-1>", self.on_button_press)
+        self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
+        self.canvas.bind("<MouseWheel>", self.on_mouse_wheel) # Windows/macOS
+        self.canvas.bind("<Button-4>", self.on_mouse_wheel)  # Linux scroll up
+        self.canvas.bind("<Button-5>", self.on_mouse_wheel)  # Linux scroll down
+
+    def on_button_press(self, event):
+        self.canvas.scan_mark(event.x, event.y)
+
+    def on_mouse_drag(self, event):
+        self.canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def on_mouse_wheel(self, event):
+        scale_factor = 1.1
+        if (event.num == 5 or event.delta < 0): # Scroll down/zoom out
+            self.canvas.scale("all", event.x, event.y, 1/scale_factor, 1/scale_factor)
+        elif (event.num == 4 or event.delta > 0): # Scroll up/zoom in
+            self.canvas.scale("all", event.x, event.y, scale_factor, scale_factor)
+
+        # Re-center the view after scaling
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+    def set_image(self, image_path):
+        if not image_path or not os.path.exists(image_path):
+            self.clear()
+            return
+
+        try:
+            self.image = Image.open(image_path)
+            self.photo_image = ImageTk.PhotoImage(self.image)
+            if self.image_id:
+                self.canvas.delete(self.image_id)
+
+            self.image_id = self.canvas.create_image(0, 0, anchor="nw", image=self.photo_image)
+            self.canvas.configure(scrollregion=self.canvas.bbox(self.image_id))
+        except Exception as e:
+            print(f"Error setting image in ZoomableCanvas: {e}") # Or log this
+            self.clear()
+
+    def clear(self):
+        if self.image_id:
+            self.canvas.delete(self.image_id)
+        self.image_id = None
+        self.image = None
+        self.photo_image = None
+        self.canvas.configure(scrollregion=(0,0,0,0))
+
 class MoviePrintApp:
     def __init__(self):
         self.root = TkinterDnD.Tk()
@@ -104,6 +172,9 @@ class MoviePrintApp:
             "haar_cascade_xml_var": "",
             "max_frames_for_print_var": "100",
             "target_thumbnail_width_var": "",
+            "output_width_var": "",
+            "output_height_var": "",
+            "target_thumbnail_height_var": "",
             "max_output_filesize_kb_var": "",
             "preview_quality_var": 75,
         }
@@ -139,6 +210,9 @@ class MoviePrintApp:
         self.max_frames_for_print_var = tk.StringVar(value=self.default_settings["max_frames_for_print_var"])
         self.max_frames_for_print_var.trace_add("write", self._handle_max_frames_change)
         self.target_thumbnail_width_var = tk.StringVar(value=self.default_settings["target_thumbnail_width_var"])
+        self.output_width_var = tk.StringVar(value=self.default_settings["output_width_var"])
+        self.output_height_var = tk.StringVar(value=self.default_settings["output_height_var"])
+        self.target_thumbnail_height_var = tk.StringVar(value=self.default_settings["target_thumbnail_height_var"])
         self.max_output_filesize_kb_var = tk.StringVar(value=self.default_settings["max_output_filesize_kb_var"])
         self.preview_quality_var = tk.IntVar(value=self.default_settings["preview_quality_var"])
 
@@ -182,6 +256,9 @@ class MoviePrintApp:
                     self.num_columns_var.set(settings.get("num_columns", "5"))
                     self.num_rows_var.set(settings.get("num_rows", ""))
                     self.target_thumbnail_width_var.set(settings.get("target_thumbnail_width", "")) # Or "320"
+                    self.output_width_var.set(settings.get("output_width", ""))
+                    self.output_height_var.set(settings.get("output_height", ""))
+                    self.target_thumbnail_height_var.set(settings.get("target_thumbnail_height", ""))
                     self.interval_seconds_var.set(settings.get("interval_seconds", "5.0"))
                     self.max_output_filesize_kb_var.set(settings.get("max_output_filesize_kb", ""))
                     # Load commonly adjusted layout and operational settings (with defaults)
@@ -203,6 +280,9 @@ class MoviePrintApp:
             "num_columns": self.num_columns_var.get(),
             "num_rows": self.num_rows_var.get(),
             "target_thumbnail_width": self.target_thumbnail_width_var.get(),
+            "output_width": self.output_width_var.get(),
+            "output_height": self.output_height_var.get(),
+            "target_thumbnail_height": self.target_thumbnail_height_var.get(),
             "interval_seconds": self.interval_seconds_var.get(),
             "max_output_filesize_kb": self.max_output_filesize_kb_var.get(),
             # Save commonly adjusted layout and operational settings
@@ -314,37 +394,9 @@ class MoviePrintApp:
         preview_outer_frame.rowconfigure(0, weight=1)
         preview_outer_frame.columnconfigure(0, weight=1)
 
-        self.canvas_thumbs = tk.Canvas(preview_outer_frame, borderwidth=0, background="#ECECEC") # Light grey background
-        self.frame_thumbs_inner = ttk.Frame(self.canvas_thumbs, padding="5")
-
-        self.canvas_thumbs.create_window((0, 0), window=self.frame_thumbs_inner, anchor="nw", tags="self.frame_thumbs_inner")
-
-        vsb = ttk.Scrollbar(preview_outer_frame, orient="vertical", command=self.canvas_thumbs.yview)
-        self.canvas_thumbs.configure(yscrollcommand=vsb.set)
-
-        vsb.grid(row=0, column=1, sticky="ns")
-        self.canvas_thumbs.grid(row=0, column=0, sticky="nsew")
-
-        self.frame_thumbs_inner.bind("<Configure>", lambda e: self.canvas_thumbs.configure(scrollregion=self.canvas_thumbs.bbox("all")))
-
-        # Mouse wheel bindings
-        self.canvas_thumbs.bind_all("<MouseWheel>", self._on_mousewheel) # Windows/macOS
-        self.canvas_thumbs.bind_all("<Button-4>", self._on_mousewheel)   # Linux (scroll up)
-        self.canvas_thumbs.bind_all("<Button-5>", self._on_mousewheel)   # Linux (scroll down)
-
-    def _on_mousewheel(self, event):
-        # For Linux, event.num determines scroll direction
-        if hasattr(event, 'num') and event.num == 4:
-            self.canvas_thumbs.yview_scroll(-1, "units")
-        elif hasattr(event, 'num') and event.num == 5:
-            self.canvas_thumbs.yview_scroll(1, "units")
-        elif hasattr(event, 'delta'): # For Windows/macOS, event.delta
-            self.canvas_thumbs.yview_scroll(int(-1*(event.delta/120)), "units")
-        # Pass the event to other handlers if not consumed by this canvas
-        # This is important if other widgets also need mouse wheel events.
-        # However, for this specific canvas, we might want to consume it.
-        # For now, let it propagate if needed, but often one might return "break"
-        # if the scroll happened over the intended widget.
+        # Integrate the ZoomableCanvas
+        self.zoomable_canvas = ZoomableCanvas(preview_outer_frame)
+        self.zoomable_canvas.grid(row=0, column=0, sticky="nsew")
 
     def start_thumbnail_preview_generation(self):
         """Generate thumbnail previews based on current settings."""
@@ -452,6 +504,20 @@ class MoviePrintApp:
                 )
 
             if success:
+                try:
+                    max_frames_str = self.max_frames_for_print_var.get()
+                    if max_frames_str and max_frames_str.strip():
+                        max_frames = int(max_frames_str)
+                        if max_frames > 0 and len(meta_list) > max_frames:
+                            thread_logger.info(f"Sampling down {len(meta_list)} frames to {max_frames} for preview.")
+                            if max_frames == 1:
+                                meta_list = [meta_list[0]]
+                            else:
+                                indices = [int(i * (len(meta_list) - 1) / (max_frames - 1)) for i in range(max_frames)]
+                                meta_list = [meta_list[i] for i in indices]
+                except (ValueError, ZeroDivisionError) as e:
+                    thread_logger.warning(f"Could not apply max_frames for preview: {e}")
+
                 self.thumbnail_paths = [m['frame_path'] for m in meta_list]
                 layout_mode = self.layout_mode_var.get()
                 grid_path = os.path.join(temp_dir, "preview_grid.jpg")
@@ -526,34 +592,7 @@ class MoviePrintApp:
             grid_path = data
             temp_dir = None
 
-        for widget in self.frame_thumbs_inner.winfo_children():
-            widget.destroy()
-        self.thumbnail_images.clear()
-
-        if grid_path and os.path.exists(grid_path):
-            try:
-                # Load the generated grid image
-                img = Image.open(grid_path)
-
-                # Determine available preview area within the canvas
-                self.root.update_idletasks()
-                max_w = self.canvas_thumbs.winfo_width() - 20
-                max_h = self.canvas_thumbs.winfo_height() - 20
-
-                if max_w > 0 and max_h > 0:
-                    img.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
-
-                photo = ImageTk.PhotoImage(img)
-                self.thumbnail_images.append(photo)
-
-                lbl = ttk.Label(self.frame_thumbs_inner, image=photo)
-                lbl.pack(padx=2, pady=2)
-
-                img.close()
-            except Exception as e:
-                self.queue.put(("log", f"Error loading preview grid {grid_path}: {e}"))
-
-        self.canvas_thumbs.configure(scrollregion=self.canvas_thumbs.bbox("all"))
+        self.zoomable_canvas.set_image(grid_path)
 
         if temp_dir:
             import shutil
@@ -653,6 +692,24 @@ class MoviePrintApp:
         self.target_thumbnail_width_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
         Tooltip(self.target_thumbnail_width_entry, "For 'grid' layout: desired width for individual thumbnails (e.g., 320).\nOverrides automatic sizing. Cell height adjusts to aspect ratios.")
         
+        lbl_output_width = ttk.Label(self.grid_options_frame, text="Output Width (px):")
+        lbl_output_width.grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        self.output_width_entry = ttk.Entry(self.grid_options_frame, textvariable=self.output_width_var, width=10)
+        self.output_width_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+        Tooltip(self.output_width_entry, "Specify the width of the final MoviePrint image.")
+
+        lbl_output_height = ttk.Label(self.grid_options_frame, text="Output Height (px):")
+        lbl_output_height.grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
+        self.output_height_entry = ttk.Entry(self.grid_options_frame, textvariable=self.output_height_var, width=10)
+        self.output_height_entry.grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
+        Tooltip(self.output_height_entry, "Specify the height of the final MoviePrint image.")
+
+        lbl_target_thumb_h = ttk.Label(self.grid_options_frame, text="Target Thumbnail Height (px):")
+        lbl_target_thumb_h.grid(row=5, column=0, sticky=tk.W, padx=5, pady=2)
+        self.target_thumbnail_height_entry = ttk.Entry(self.grid_options_frame, textvariable=self.target_thumbnail_height_var, width=10)
+        self.target_thumbnail_height_entry.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
+        Tooltip(self.target_thumbnail_height_entry, "For 'grid' layout: desired height for individual thumbnails (e.g., 180).\nOverrides automatic sizing. Cell width adjusts to aspect ratios.")
+
         self.timeline_options_frame = ttk.Frame(tab)
         self.timeline_options_frame.grid(row=3, column=0, columnspan=2, sticky=tk.EW, pady=3) 
         self.timeline_options_frame.columnconfigure(1, weight=1)
@@ -1038,6 +1095,33 @@ class MoviePrintApp:
                     return
             else:
                 settings.target_thumbnail_width = None
+
+            output_width_str = self.output_width_var.get()
+            if output_width_str and output_width_str.strip():
+                settings.output_width = int(output_width_str)
+                if settings.output_width <= 0:
+                    messagebox.showerror("Input Error", "Output Width must be a positive integer if set.")
+                    return
+            else:
+                settings.output_width = None
+
+            output_height_str = self.output_height_var.get()
+            if output_height_str and output_height_str.strip():
+                settings.output_height = int(output_height_str)
+                if settings.output_height <= 0:
+                    messagebox.showerror("Input Error", "Output Height must be a positive integer if set.")
+                    return
+            else:
+                settings.output_height = None
+
+            target_thumb_h_str = self.target_thumbnail_height_var.get()
+            if target_thumb_h_str and target_thumb_h_str.strip():
+                settings.target_thumbnail_height = int(target_thumb_h_str)
+                if settings.target_thumbnail_height <= 0:
+                    messagebox.showerror("Input Error", "Target Thumbnail Height must be a positive integer if set.")
+                    return
+            else:
+                settings.target_thumbnail_height = None
 
         except ValueError as e: messagebox.showerror("Input Error", f"Invalid numeric value in settings: {e}"); return
         
