@@ -140,6 +140,7 @@ class MoviePrintApp:
         self._internal_input_paths = [] # Initialize for drag-and-drop and settings load
         self.thumbnail_images = [] # To store PhotoImage objects for preview
         self.thumbnail_paths = []
+        self.queue = queue.Queue()
 
         # --- Define Default Settings Store ---
         self.default_settings = {
@@ -219,7 +220,6 @@ class MoviePrintApp:
         # --- Load persistent settings (will override defaults if settings file exists) ---
         self._load_persistent_settings()
 
-        self.queue = queue.Queue()
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(expand=True, fill=tk.BOTH)
 
@@ -403,9 +403,8 @@ class MoviePrintApp:
         self.queue.put(("log", "Thumbnail preview generation initiated."))
 
         # Clear previous preview thumbnails
-        for widget in self.frame_thumbs_inner.winfo_children():
-            widget.destroy()
-        self.thumbnail_images.clear()
+        self.zoomable_canvas.clear()
+        self.thumbnail_images.clear() # This might be redundant if zoomable_canvas manages all image refs
         self.thumbnail_paths = []
 
         if not hasattr(self, '_internal_input_paths') or not self._internal_input_paths:
