@@ -131,17 +131,54 @@ class ZoomableCanvas(ttk.Frame):
         self.photo_image = None
         self.canvas.configure(scrollregion=(0,0,0,0))
 
+
+class CollapsibleFrame(ttk.Frame):
+    """A collapsible frame widget that can hide or show its content."""
+    def __init__(self, parent, text="", initial_state='expanded', **kwargs):
+        super().__init__(parent, **kwargs)
+        self.text = text
+        self.columnconfigure(0, weight=1)
+
+        # Style for the toggle button
+        style = ttk.Style()
+        style.configure("Collapsible.TButton", padding=2, font=('Helvetica', 10, 'bold'))
+
+        self.toggle_button = ttk.Button(self, text=f"−  {self.text}", command=self.toggle, style="Collapsible.TButton")
+        self.toggle_button.grid(row=0, column=0, sticky=tk.EW)
+
+        self.sub_frame = ttk.Frame(self, padding=(5, 5, 5, 5), relief=tk.GROOVE, borderwidth=2)
+        self.sub_frame.grid(row=1, column=0, sticky=tk.EW)
+
+        self._is_expanded = tk.BooleanVar(value=initial_state == 'expanded')
+        self._is_expanded.trace_add("write", self._update_view)
+        self._update_view()
+
+    def toggle(self):
+        self._is_expanded.set(not self._is_expanded.get())
+
+    def _update_view(self, *args):
+        if self._is_expanded.get():
+            self.sub_frame.grid()
+            self.toggle_button.configure(text=f"−  {self.text}")
+        else:
+            self.sub_frame.grid_remove()
+            self.toggle_button.configure(text=f"+  {self.text}")
+
+    def get_content_frame(self):
+        return self.sub_frame
+
+
 class MoviePrintApp:
     def __init__(self):
         self.root = TkinterDnD.Tk()
         self.root.title(f"MoviePrint Generator v{__version__}")
-        self.root.geometry("780x950")
+        self.root.geometry("1200x800") # Start with a larger window
 
         self._internal_input_paths = [] # Initialize for drag-and-drop and settings load
         self.thumbnail_images = [] # To store PhotoImage objects for preview
         self.thumbnail_paths = []
         self.queue = queue.Queue()
-        self.preview_window = None
+        self.preview_window = None # This will be the main canvas now
         self.preview_zoomable_canvas = None
 
         # --- Define Default Settings Store ---
@@ -224,9 +261,46 @@ class MoviePrintApp:
 
         main_frame = ttk.Frame(self.root, padding="10")
         main_frame.pack(expand=True, fill=tk.BOTH)
+        main_frame.rowconfigure(1, weight=1)
+        main_frame.columnconfigure(0, weight=1)
 
         self._create_input_output_section(main_frame)
-        self._create_tabs_section(main_frame)
+
+        # --- Main content area with a paned window for settings and preview ---
+        main_paned_window = ttk.PanedWindow(main_frame, orient=tk.HORIZONTAL)
+        main_paned_window.grid(row=1, column=0, sticky="nsew", pady=5)
+
+        # --- Left pane will be a scrollable settings sidebar ---
+        settings_container = ttk.Frame(main_paned_window)
+        settings_canvas = tk.Canvas(settings_container, highlightthickness=0)
+        scrollbar = ttk.Scrollbar(settings_container, orient="vertical", command=settings_canvas.yview)
+        self.settings_frame = ttk.Frame(settings_canvas, padding="5")
+
+        self.settings_frame.bind(
+            "<Configure>",
+            lambda e: settings_canvas.configure(scrollregion=settings_canvas.bbox("all"))
+        )
+
+        settings_canvas.create_window((0, 0), window=self.settings_frame, anchor="nw")
+        settings_canvas.configure(yscrollcommand=scrollbar.set)
+
+        settings_canvas.pack(side="left", fill="both", expand=True)
+        scrollbar.pack(side="right", fill="y")
+
+        main_paned_window.add(settings_container, weight=1) # Adjust weight for initial size
+
+
+        # --- Right pane for the thumbnail preview ---
+        preview_frame = ttk.LabelFrame(main_paned_window, text="Preview", padding="5")
+        preview_frame.rowconfigure(0, weight=1)
+        preview_frame.columnconfigure(0, weight=1)
+        main_paned_window.add(preview_frame, weight=3) # Adjust weight for initial size
+
+        self.preview_zoomable_canvas = ZoomableCanvas(preview_frame)
+        self.preview_zoomable_canvas.grid(row=0, column=0, sticky="nsew")
+
+        self._populate_settings_sidebar(self.settings_frame)
+
         self._create_action_log_section(main_frame)
 
         self.update_options_visibility()
@@ -306,25 +380,6 @@ class MoviePrintApp:
         self._save_persistent_settings()
         self.root.destroy()
 
-    def _create_preview_window(self):
-        if self.preview_window and self.preview_window.winfo_exists():
-            self.preview_window.lift()
-            return
-
-        self.preview_window = tk.Toplevel(self.root)
-        self.preview_window.title("Thumbnail Preview")
-        self.preview_window.geometry("800x600")
-
-        self.preview_zoomable_canvas = ZoomableCanvas(self.preview_window)
-        self.preview_zoomable_canvas.pack(fill=tk.BOTH, expand=True)
-
-        def on_preview_close():
-            self.preview_window.destroy()
-            self.preview_window = None
-            self.preview_zoomable_canvas = None
-
-        self.preview_window.protocol("WM_DELETE_WINDOW", on_preview_close)
-
     def _handle_max_frames_change(self, *args):
         # Check if a single video file is selected
         if hasattr(self, '_internal_input_paths') and \
@@ -337,7 +392,7 @@ class MoviePrintApp:
     # ... (rest of the _create_... and helper methods as before) ...
     def _create_input_output_section(self, parent_frame):
         input_section = ttk.LabelFrame(parent_frame, text="Input / Output", padding="10")
-        input_section.pack(fill=tk.X, padx=5, pady=5)
+        input_section.grid(row=0, column=0, sticky="ew", padx=5, pady=5)
         input_section.columnconfigure(1, weight=1)
         lbl_input = ttk.Label(input_section, text="Video File(s) / Dir:")
         lbl_input.grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
@@ -357,70 +412,6 @@ class MoviePrintApp:
         btn_browse_output = ttk.Button(input_section, text="Browse...", command=self.browse_output_dir)
         btn_browse_output.grid(row=1, column=2, padx=5, pady=5)
         Tooltip(btn_browse_output, "Browse for the output directory.")
-
-    def _create_tabs_section(self, parent_frame):
-        notebook = ttk.Notebook(parent_frame, padding="5")
-        notebook.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        tab_extraction = ttk.Frame(notebook, padding="5")
-        tab_layout = ttk.Frame(notebook, padding="5")
-        tab_batch_output = ttk.Frame(notebook, padding="5")
-        tab_common = ttk.Frame(notebook, padding="5")
-        self.tab_preview = ttk.Frame(notebook, padding="5") # New Preview Tab
-
-        notebook.add(tab_extraction, text='Extraction & Segment')
-        notebook.add(tab_layout, text='Layout')
-        notebook.add(self.tab_preview, text='Thumbnail Preview') # Add to notebook
-        notebook.add(tab_batch_output, text='Batch & Output')
-        notebook.add(tab_common, text='Common & Advanced')
-
-        self._populate_extraction_tab(tab_extraction)
-        self._populate_layout_tab(tab_layout)
-        self._populate_preview_tab(self.tab_preview) # Populate new tab
-        self._populate_batch_output_tab(tab_batch_output)
-        self._populate_common_tab(tab_common)
-
-    def _populate_preview_tab(self, tab):
-        tab.columnconfigure(0, weight=1) # Make the preview area expand
-
-        # Create a frame for the buttons
-        button_frame = ttk.Frame(tab)
-        button_frame.pack(pady=10)
-
-        self.btn_preview_thumbs = ttk.Button(button_frame, text="Preview Extracted Thumbnails", command=self.start_thumbnail_preview_generation)
-        self.btn_preview_thumbs.pack(side=tk.LEFT, padx=5)
-        Tooltip(self.btn_preview_thumbs, "Generate and display a preview of thumbnails based on current extraction settings for the selected video(s).")
-
-        self.btn_save_thumbs = ttk.Button(button_frame, text="Save Thumbnails", command=self.save_thumbnails)
-        self.btn_save_thumbs.pack(side=tk.LEFT, padx=5)
-        Tooltip(self.btn_save_thumbs, "Save the generated thumbnails to a selected directory.")
-
-        # --- NEW Quality Slider ---
-        quality_frame = ttk.Frame(tab)
-        quality_frame.pack(pady=5, fill=tk.X, padx=10)
-        quality_frame.columnconfigure(1, weight=1) # Let the slider expand
-
-        lbl_quality = ttk.Label(quality_frame, text="Preview Quality:")
-        lbl_quality.grid(row=0, column=0, sticky=tk.W, padx=(0,5))
-        Tooltip(lbl_quality, "Adjust the quality (size) of the preview thumbnails.\nLower quality is faster. This does not affect the final MoviePrint.")
-
-        self.quality_slider = ttk.Scale(quality_frame, from_=10, to=100, orient=tk.HORIZONTAL, variable=self.preview_quality_var, command=lambda s: self.preview_quality_var.set(int(float(s))))
-        self.quality_slider.grid(row=0, column=1, sticky=tk.EW)
-
-        quality_value_label = ttk.Label(quality_frame, textvariable=self.preview_quality_var, width=4)
-        quality_value_label.grid(row=0, column=2, sticky=tk.E, padx=(5,0))
-        # --- END NEW ---
-
-        preview_outer_frame = ttk.LabelFrame(tab, text="Thumbnails", padding="10")
-        preview_outer_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
-        preview_outer_frame.rowconfigure(0, weight=1)
-        preview_outer_frame.columnconfigure(0, weight=1)
-
-        # Integrate the ZoomableCanvas
-        info_label = ttk.Label(preview_outer_frame,
-                               text="Preview will open in a new, resizable window.",
-                               justify=tk.CENTER,
-                               style="TLabel")
-        info_label.grid(row=0, column=0, sticky="nsew", padx=10, pady=10)
 
     def start_thumbnail_preview_generation(self):
         """Generate thumbnail previews based on current settings."""
@@ -616,15 +607,42 @@ class MoviePrintApp:
             grid_path = data
             temp_dir = None
 
-        self._create_preview_window()
         if self.preview_zoomable_canvas:
             self.preview_zoomable_canvas.set_image(grid_path)
         else:
-            self.queue.put(("log", "Error: Preview window not available to display image."))
+            self.queue.put(("log", "Error: Preview canvas not available to display image."))
 
         if temp_dir:
             import shutil
-            shutil.rmtree(temp_dir, ignore_errors=True)
+            # This temp_dir contained the grid_path image, so we must not delete it
+            # until the image is loaded by the canvas. A small delay can help,
+            # though a more robust solution would use callbacks.
+            self.root.after(1000, lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+
+    def _populate_settings_sidebar(self, parent_frame):
+        # This new method will contain all the settings widgets, organized in collapsible frames
+        parent_frame.columnconfigure(0, weight=1)
+
+        # --- Extraction & Segment Section ---
+        extraction_frame = CollapsibleFrame(parent_frame, "Extraction & Segment")
+        extraction_frame.grid(row=0, column=0, sticky=tk.EW, pady=(5, 10))
+        self._populate_extraction_tab(extraction_frame.get_content_frame())
+
+        # --- Layout Section ---
+        layout_frame = CollapsibleFrame(parent_frame, "Layout")
+        layout_frame.grid(row=1, column=0, sticky=tk.EW, pady=(0, 10))
+        self._populate_layout_tab(layout_frame.get_content_frame())
+
+        # --- Batch & Output Section ---
+        batch_output_frame = CollapsibleFrame(parent_frame, "Batch & Output")
+        batch_output_frame.grid(row=2, column=0, sticky=tk.EW, pady=(0, 10))
+        self._populate_batch_output_tab(batch_output_frame.get_content_frame())
+
+        # --- Common & Advanced Section ---
+        common_frame = CollapsibleFrame(parent_frame, "Common & Advanced")
+        common_frame.grid(row=3, column=0, sticky=tk.EW, pady=(0, 10))
+        self._populate_common_tab(common_frame.get_content_frame())
+
 
     def _populate_extraction_tab(self, tab):
         tab.columnconfigure(1, weight=1)
@@ -866,18 +884,40 @@ class MoviePrintApp:
 
 
     def _create_action_log_section(self, parent_frame):
-        # ... (content as before) ...
-        action_section = ttk.Frame(parent_frame, padding="10")
-        action_section.pack(fill=tk.X, padx=5, pady=5)
-        self.generate_button = ttk.Button(action_section, text="Generate MoviePrint", command=self.generate_movieprint_action)
-        self.generate_button.pack(pady=5)
+        # This section will now be at the bottom of the main frame
+        action_log_frame = ttk.Frame(parent_frame)
+        action_log_frame.grid(row=2, column=0, sticky="ew", padx=5, pady=5)
+        action_log_frame.columnconfigure(0, weight=1)
+
+        # Button and Progress Bar Frame
+        action_section = ttk.Frame(action_log_frame)
+        action_section.grid(row=0, column=0, columnspan=2, sticky="ew")
+        action_section.columnconfigure(0, weight=1) # Make column with progress bar expandable
+
+        # Add Preview and Save buttons
+        self.btn_preview_thumbs = ttk.Button(action_section, text="Preview", command=self.start_thumbnail_preview_generation)
+        self.btn_preview_thumbs.grid(row=0, column=1, padx=(0,5), pady=5)
+        Tooltip(self.btn_preview_thumbs, "Generate and display a preview of thumbnails in the right pane.")
+
+        self.btn_save_thumbs = ttk.Button(action_section, text="Save Thumbnails", command=self.save_thumbnails)
+        self.btn_save_thumbs.grid(row=0, column=2, padx=(0,5), pady=5)
+        Tooltip(self.btn_save_thumbs, "Save the generated thumbnails to a selected directory.")
+
+        self.generate_button = ttk.Button(action_section, text="Save MoviePrint", command=self.generate_movieprint_action)
+        self.generate_button.grid(row=0, column=3, padx=(0,5), pady=5)
         Tooltip(self.generate_button, "Start generating the MoviePrint with current settings.")
+
         self.progress_bar = ttk.Progressbar(action_section, orient="horizontal", mode="determinate", length=300)
-        self.progress_bar.pack(fill=tk.X, padx=5, pady=2)
-        log_section = ttk.LabelFrame(parent_frame, text="Log", padding="10")
-        log_section.pack(expand=True, fill=tk.BOTH, padx=5, pady=5)
-        self.log_text = scrolledtext.ScrolledText(log_section, wrap=tk.WORD, state="disabled", height=10)
-        self.log_text.pack(expand=True, fill=tk.BOTH)
+        self.progress_bar.grid(row=1, column=0, columnspan=4, sticky="ew", padx=5, pady=2)
+
+        # Log Section
+        log_section = ttk.LabelFrame(action_log_frame, text="Log", padding="10")
+        log_section.grid(row=1, column=0, sticky="nsew", pady=(10,0))
+        log_section.columnconfigure(0, weight=1)
+        log_section.rowconfigure(0, weight=1) # Allow log to resize vertically if needed
+
+        self.log_text = scrolledtext.ScrolledText(log_section, wrap=tk.WORD, state="disabled", height=8)
+        self.log_text.grid(row=0, column=0, sticky="nsew")
 
     def _get_video_duration_sync(self, video_path):
         # ... (as defined before) ...
