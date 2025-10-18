@@ -243,6 +243,60 @@ def extract_shot_boundary_frames(video_path, output_folder, logger, output_forma
         if cap_cv: cap_cv.release()
         # video_manager is closed by PySceneDetect automatically or by its context manager if used.
 
+def extract_specific_frame(video_path, timestamp_sec, output_path, logger):
+    """
+    Extracts a single specific frame from a video file at a given timestamp.
+
+    Args:
+        video_path (str): Path to the video file.
+        timestamp_sec (float): The timestamp in seconds for the frame to extract.
+        output_path (str): The full path where the extracted frame will be saved.
+        logger (logging.Logger): Logger instance.
+
+    Returns:
+        bool: True if the frame was extracted successfully, False otherwise.
+    """
+    if not os.path.exists(video_path):
+        logger.error(f"Video file not found: {video_path}")
+        return False
+
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        logger.error(f"Could not open video {video_path} with OpenCV.")
+        return False
+
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    if fps == 0:
+        logger.warning("Video FPS is 0. Cannot reliably seek by time.")
+        cap.release()
+        return False
+
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    duration = total_frames / fps
+
+    if timestamp_sec < 0 or timestamp_sec > duration:
+        logger.warning(f"Timestamp {timestamp_sec}s is out of video duration (0-{duration}s).")
+        cap.release()
+        return False
+
+    cap.set(cv2.CAP_PROP_POS_MSEC, timestamp_sec * 1000)
+    ret, frame = cap.read()
+
+    if not ret:
+        logger.warning(f"Could not read frame at timestamp {timestamp_sec}s.")
+        cap.release()
+        return False
+
+    try:
+        cv2.imwrite(output_path, frame)
+        logger.info(f"Successfully extracted frame at {timestamp_sec}s to {output_path}")
+        cap.release()
+        return True
+    except Exception as e:
+        logger.error(f"Error saving frame to {output_path}: {e}")
+        cap.release()
+        return False
+
 if __name__ == "__main__":
     test_logger = logging.getLogger("video_processing_test")
     test_logger.setLevel(logging.INFO)
