@@ -280,7 +280,20 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
     grid_params = {
         'image_source_data': items_for_grid, 'output_path': output_path,
         'padding': settings.padding, 'background_color_hex': settings.background_color,
-        'layout_mode': settings.layout_mode, 'logger': logger
+        'layout_mode': settings.layout_mode, 'logger': logger,
+        'grid_margin': settings.grid_margin,
+        'rounded_corners': settings.rounded_corners,
+        'frame_info_show': settings.frame_info_show,
+        'show_header': settings.show_header,
+        'show_file_path': settings.show_file_path,
+        'show_timecode': settings.show_timecode,
+        'show_frame_num': settings.show_frame_num,
+        'frame_info_timecode_or_frame': settings.frame_info_timecode_or_frame,
+        'frame_info_font_color': settings.frame_info_font_color,
+        'frame_info_bg_color': settings.frame_info_bg_color,
+        'frame_info_position': settings.frame_info_position,
+        'frame_info_size': settings.frame_info_size,
+        'frame_info_margin': settings.frame_info_margin
     }
     if settings.layout_mode == "grid":
         grid_params.update({'rows': getattr(settings, 'rows', None),
