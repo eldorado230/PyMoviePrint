@@ -177,12 +177,13 @@ class MoviePrintApp:
         # --- COLOR DEFINITIONS ---
         BG_COLOR = "#1e1e1e"
         FG_COLOR = "#e0e0e0"
-        BORDER_COLOR = "#333333"
-        SELECT_BG = "#2a2a2a"
+        BORDER_COLOR = "#444444"
+        SELECT_BG = "#2c2c2c"
         SELECT_FG = "#ffffff"
-        TEAL_ACCENT = "#009688"
-        TEAL_ACTIVE = "#00796b"
+        TEAL_ACCENT = "#00bfa5" # Brighter Teal
+        TEAL_ACTIVE = "#00a691"
         ENTRY_BG = "#252525"
+        FONT_FAMILY = "Helvetica" # Changed to Helvetica for a cleaner look
 
         # --- WIDGET STYLES ---
         style.configure(".",
@@ -190,7 +191,8 @@ class MoviePrintApp:
                         foreground=FG_COLOR,
                         fieldbackground=ENTRY_BG,
                         borderwidth=1,
-                        relief=tk.FLAT)
+                        relief=tk.FLAT,
+                        font=(FONT_FAMILY, 10))
 
         style.map(".",
                   foreground=[('disabled', '#666666'),
@@ -199,22 +201,27 @@ class MoviePrintApp:
                   fieldbackground=[('disabled', '#333333')])
 
         style.configure("TFrame", background=BG_COLOR)
-        style.configure("TLabel", background=BG_COLOR, foreground=FG_COLOR, padding=3)
+        style.configure("TLabel", background=BG_COLOR, foreground=FG_COLOR, padding=4, font=(FONT_FAMILY, 10))
+
         style.configure("TButton",
                         background=TEAL_ACCENT,
                         foreground=SELECT_FG,
                         bordercolor=TEAL_ACCENT,
-                        padding=(8, 4),
-                        font=('Helvetica', 10, 'bold'))
+                        padding=(10, 6),
+                        font=(FONT_FAMILY, 10, 'bold'),
+                        relief=tk.RAISED,
+                        borderwidth=2)
         style.map("TButton",
                   background=[('active', TEAL_ACTIVE), ('pressed', TEAL_ACTIVE)],
+                  bordercolor=[('active', TEAL_ACTIVE)],
                   relief=[('pressed', 'sunken')])
 
         style.configure("TEntry",
                         fieldbackground=ENTRY_BG,
                         foreground=FG_COLOR,
                         insertcolor=FG_COLOR,
-                        bordercolor=BORDER_COLOR)
+                        bordercolor=BORDER_COLOR,
+                        padding=4)
         style.map("TEntry",
                   bordercolor=[('focus', TEAL_ACCENT)],
                   fieldbackground=[('readonly', '#333333')])
@@ -223,7 +230,8 @@ class MoviePrintApp:
                         fieldbackground=ENTRY_BG,
                         foreground=FG_COLOR,
                         bordercolor=BORDER_COLOR,
-                        arrowcolor=TEAL_ACCENT)
+                        arrowcolor=TEAL_ACCENT,
+                        padding=4)
         style.map("TCombobox",
                   fieldbackground=[('readonly', ENTRY_BG)],
                   selectbackground=[('readonly', SELECT_BG)],
@@ -242,13 +250,14 @@ class MoviePrintApp:
         style.configure("TLabelframe.Label",
                         foreground=TEAL_ACCENT,
                         background=BG_COLOR,
-                        font=('Helvetica', 11, 'bold'))
+                        font=(FONT_FAMILY, 11, 'bold'))
 
         style.configure("Vertical.TScrollbar",
                         background=BG_COLOR,
                         troughcolor=ENTRY_BG,
                         bordercolor=BG_COLOR,
-                        arrowcolor=FG_COLOR)
+                        arrowcolor=FG_COLOR,
+                        width=12)
         style.map("Vertical.TScrollbar",
                   background=[('active', TEAL_ACCENT)],
                   arrowcolor=[('active', SELECT_FG)])
@@ -257,7 +266,8 @@ class MoviePrintApp:
                         background=BG_COLOR,
                         troughcolor=ENTRY_BG,
                         bordercolor=BG_COLOR,
-                        arrowcolor=FG_COLOR)
+                        arrowcolor=FG_COLOR,
+                        height=12)
         style.map("Horizontal.TScrollbar",
                   background=[('active', TEAL_ACCENT)],
                   arrowcolor=[('active', SELECT_FG)])
@@ -268,9 +278,11 @@ class MoviePrintApp:
                         bordercolor=BORDER_COLOR)
 
         style.configure("Collapsible.TButton",
-                        font=('Helvetica', 10, 'bold'),
+                        font=(FONT_FAMILY, 10, 'bold'),
                         background=SELECT_BG,
-                        foreground=TEAL_ACCENT)
+                        foreground=TEAL_ACCENT,
+                        anchor='w', # Align text to the left
+                        padding=(6, 4))
         style.map("Collapsible.TButton",
                   background=[('active', '#3a3a3a')])
 
@@ -757,115 +769,111 @@ class MoviePrintApp:
             self.root.after(1000, lambda: shutil.rmtree(temp_dir, ignore_errors=True))
 
     def _populate_settings_sidebar(self, parent_frame):
-        # This new method will contain all the settings widgets, organized in collapsible frames
+        # Reorganized settings into more logical collapsible frames.
         parent_frame.columnconfigure(0, weight=1)
 
-        # --- Extraction & Segment Section ---
-        extraction_frame = CollapsibleFrame(parent_frame, "Extraction & Segment")
+        # --- Extraction & Layout Section ---
+        extraction_frame = CollapsibleFrame(parent_frame, "Extraction & Layout")
         extraction_frame.grid(row=0, column=0, sticky=tk.EW, pady=(5, 10))
-        self._populate_extraction_tab(extraction_frame.get_content_frame())
+        self._populate_extraction_settings(extraction_frame.get_content_frame())
 
-        # --- Layout Section ---
-        layout_frame = CollapsibleFrame(parent_frame, "Layout")
-        layout_frame.grid(row=1, column=0, sticky=tk.EW, pady=(0, 10))
-        self._populate_layout_tab(layout_frame.get_content_frame())
+        # --- Appearance & Styling Section ---
+        appearance_frame = CollapsibleFrame(parent_frame, "Appearance & Styling")
+        appearance_frame.grid(row=1, column=0, sticky=tk.EW, pady=(0, 10))
+        self._populate_appearance_settings(appearance_frame.get_content_frame())
 
-        # --- Batch & Output Section ---
-        batch_output_frame = CollapsibleFrame(parent_frame, "Batch & Output")
-        batch_output_frame.grid(row=2, column=0, sticky=tk.EW, pady=(0, 10))
-        self._populate_batch_output_tab(batch_output_frame.get_content_frame())
-
-        # --- Styling Section ---
-        styling_frame = CollapsibleFrame(parent_frame, "Styling")
-        styling_frame.grid(row=2, column=0, sticky=tk.EW, pady=(0, 10))
-        self._populate_styling_tab(styling_frame.get_content_frame())
-
-        # --- Batch & Output Section ---
-        batch_output_frame = CollapsibleFrame(parent_frame, "Batch & Output")
-        batch_output_frame.grid(row=3, column=0, sticky=tk.EW, pady=(0, 10))
-        self._populate_batch_output_tab(batch_output_frame.get_content_frame())
-
-        # --- Common & Advanced Section ---
-        common_frame = CollapsibleFrame(parent_frame, "Common & Advanced")
-        common_frame.grid(row=4, column=0, sticky=tk.EW, pady=(0, 10))
-        self._populate_common_tab(common_frame.get_content_frame())
+        # --- Output & Advanced Section ---
+        output_frame = CollapsibleFrame(parent_frame, "Output & Advanced")
+        output_frame.grid(row=2, column=0, sticky=tk.EW, pady=(0, 10))
+        self._populate_output_advanced_settings(output_frame.get_content_frame())
 
 
-    def _populate_extraction_tab(self, tab):
+    def _populate_extraction_settings(self, tab):
         tab.columnconfigure(1, weight=1)
+
+        # Add padding to all children of the tab
+        for i in range(10): # Assuming max 10 rows
+            tab.rowconfigure(i, pad=5)
+        tab.columnconfigure(0, pad=5)
+        tab.columnconfigure(1, pad=5)
+
         lbl_ext_mode = ttk.Label(tab, text="Extraction Mode:")
-        lbl_ext_mode.grid(row=0, column=0, sticky=tk.W, padx=5, pady=(5,2))
+        lbl_ext_mode.grid(row=0, column=0, sticky=tk.W)
         self.extraction_mode_combo = ttk.Combobox(tab, textvariable=self.extraction_mode_var, values=["interval", "shot"], state="readonly", width=15)
-        self.extraction_mode_combo.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=(5,2))
+        self.extraction_mode_combo.grid(row=0, column=1, sticky=tk.EW)
         self.extraction_mode_combo.bind("<<ComboboxSelected>>", self.update_options_visibility)
         Tooltip(self.extraction_mode_combo, "Choose method: regular intervals or detected shots.")
-        
+
         self.interval_options_frame = ttk.Frame(tab)
-        self.interval_options_frame.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=(0,2))
+        self.interval_options_frame.grid(row=1, column=0, columnspan=2, sticky=tk.EW)
         self.interval_options_frame.columnconfigure(1, weight=1)
-        
+
         lbl_int_sec = ttk.Label(self.interval_options_frame, text="Interval (seconds):")
         lbl_int_sec.grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
         self.interval_seconds_entry = ttk.Entry(self.interval_options_frame, textvariable=self.interval_seconds_var, width=10)
         self.interval_seconds_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
         Tooltip(self.interval_seconds_entry, "Time between frames for 'interval' mode (e.g., 5.0).\nAuto-calculated if a single video is selected and 'Max Frames for Print' is set.")
-        
+
         lbl_int_frames = ttk.Label(self.interval_options_frame, text="Interval (frames):")
         lbl_int_frames.grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
         self.interval_frames_entry = ttk.Entry(self.interval_options_frame, textvariable=self.interval_frames_var, width=10)
         self.interval_frames_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
         Tooltip(self.interval_frames_entry, "Frame count between frames for 'interval' mode (e.g., 150).\nIf both seconds and frames interval are set, seconds interval is used.")
-        
+
         self.shot_options_frame = ttk.Frame(tab)
-        self.shot_options_frame.grid(row=2, column=0, columnspan=2, sticky=tk.EW, pady=(0,2))
+        self.shot_options_frame.grid(row=2, column=0, columnspan=2, sticky=tk.EW)
         self.shot_options_frame.columnconfigure(1, weight=1)
         lbl_shot_thresh = ttk.Label(self.shot_options_frame, text="Shot Threshold:")
         lbl_shot_thresh.grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
         self.shot_threshold_entry = ttk.Entry(self.shot_options_frame, textvariable=self.shot_threshold_var, width=10)
         self.shot_threshold_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
         Tooltip(self.shot_threshold_entry, "Sensitivity for shot detection (e.g., 27.0). Lower = more shots.")
-        
+
         lbl_start_time = ttk.Label(tab, text="Start Time (HH:MM:SS or S):")
-        lbl_start_time.grid(row=3, column=0, sticky=tk.W, padx=5, pady=(5,2))
+        lbl_start_time.grid(row=3, column=0, sticky=tk.W)
         self.start_time_entry = ttk.Entry(tab, textvariable=self.start_time_var, width=15)
-        self.start_time_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=(5,2))
+        self.start_time_entry.grid(row=3, column=1, sticky=tk.W)
         Tooltip(self.start_time_entry, "Process video from this time. Examples: '01:23:45', '90:00', '5400.5'.\nLeave blank to process from the beginning.")
-        
+
         lbl_end_time = ttk.Label(tab, text="End Time (HH:MM:SS or S):")
-        lbl_end_time.grid(row=4, column=0, sticky=tk.W, padx=5, pady=(2,5))
+        lbl_end_time.grid(row=4, column=0, sticky=tk.W)
         self.end_time_entry = ttk.Entry(tab, textvariable=self.end_time_var, width=15)
-        self.end_time_entry.grid(row=4, column=1, sticky=tk.W, padx=5, pady=(2,5))
+        self.end_time_entry.grid(row=4, column=1, sticky=tk.W)
         Tooltip(self.end_time_entry, "Process video up to this time. Examples: '01:23:45', '90:00', '5400.5'.\nLeave blank to process until the end.")
-        
+
         lbl_ex_frames = ttk.Label(tab, text="Exclude Frames (abs nums):")
-        lbl_ex_frames.grid(row=5, column=0, sticky=tk.W, padx=5, pady=(5,2))
+        lbl_ex_frames.grid(row=5, column=0, sticky=tk.W)
         self.exclude_frames_entry = ttk.Entry(tab, textvariable=self.exclude_frames_var)
-        self.exclude_frames_entry.grid(row=5, column=1, sticky=tk.EW, padx=5, pady=(5,2))
+        self.exclude_frames_entry.grid(row=5, column=1, sticky=tk.EW)
         Tooltip(self.exclude_frames_entry, "Comma-separated absolute frame numbers to exclude (for interval mode only). E.g., 100,101,150")
-        
+
         lbl_ex_shots = ttk.Label(tab, text="Exclude Shots (1-based idx):")
-        lbl_ex_shots.grid(row=6, column=0, sticky=tk.W, padx=5, pady=(2,5))
+        lbl_ex_shots.grid(row=6, column=0, sticky=tk.W)
         self.exclude_shots_entry = ttk.Entry(tab, textvariable=self.exclude_shots_var)
-        self.exclude_shots_entry.grid(row=6, column=1, sticky=tk.EW, padx=5, pady=(2,5))
+        self.exclude_shots_entry.grid(row=6, column=1, sticky=tk.EW)
         Tooltip(self.exclude_shots_entry, "Comma-separated 1-based shot indices to exclude (for shot mode only). E.g., 1,3")
 
-    def _populate_layout_tab(self, tab):
-        tab.columnconfigure(1, weight=1)
+        # --- Layout Mode ---
         lbl_layout_mode = ttk.Label(tab, text="Layout Mode:")
-        lbl_layout_mode.grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
+        lbl_layout_mode.grid(row=7, column=0, sticky=tk.W, padx=5, pady=5)
         self.layout_mode_combo = ttk.Combobox(tab, textvariable=self.layout_mode_var, values=["grid", "timeline"], state="readonly", width=15)
-        self.layout_mode_combo.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=5)
+        self.layout_mode_combo.grid(row=7, column=1, sticky=tk.EW, padx=5, pady=5)
         self.layout_mode_combo.bind("<<ComboboxSelected>>", self.update_options_visibility)
         Tooltip(self.layout_mode_combo, "Choose MoviePrint layout: fixed grid or timeline (proportional width).\nTimeline layout requires 'shot' extraction mode.")
-        
+
         lbl_max_frames = ttk.Label(tab, text="Max Frames for Print:")
-        lbl_max_frames.grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
+        lbl_max_frames.grid(row=8, column=0, sticky=tk.W, padx=5, pady=5)
         self.max_frames_entry = ttk.Entry(tab, textvariable=self.max_frames_for_print_var, width=10)
-        self.max_frames_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
+        self.max_frames_entry.grid(row=8, column=1, sticky=tk.W, padx=5, pady=5)
         Tooltip(self.max_frames_entry, "Target maximum number of frames in the final MoviePrint.\nIf extraction yields more, frames will be sampled down to this count (e.g., 100). Also used to auto-calculate 'Interval (seconds)' when a single video is selected.")
-        
+
+
+    def _populate_appearance_settings(self, tab):
+        tab.columnconfigure(1, weight=1)
+
+        # --- Grid/Timeline Frames ---
         self.grid_options_frame = ttk.Frame(tab)
-        self.grid_options_frame.grid(row=2, column=0, columnspan=2, sticky=tk.EW, pady=3)
+        self.grid_options_frame.grid(row=0, column=0, columnspan=2, sticky=tk.EW, pady=3)
         self.grid_options_frame.columnconfigure(1, weight=1)
         lbl_cols = ttk.Label(self.grid_options_frame, text="Number of Columns:")
         lbl_cols.grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
@@ -884,7 +892,7 @@ class MoviePrintApp:
         self.target_thumbnail_width_entry = ttk.Entry(self.grid_options_frame, textvariable=self.target_thumbnail_width_var, width=10)
         self.target_thumbnail_width_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
         Tooltip(self.target_thumbnail_width_entry, "For 'grid' layout: desired width for individual thumbnails (e.g., 320).\nOverrides automatic sizing. Cell height adjusts to aspect ratios.")
-        
+
         lbl_output_width = ttk.Label(self.grid_options_frame, text="Output Width (px):")
         lbl_output_width.grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
         self.output_width_entry = ttk.Entry(self.grid_options_frame, textvariable=self.output_width_var, width=10)
@@ -904,7 +912,7 @@ class MoviePrintApp:
         Tooltip(self.target_thumbnail_height_entry, "For 'grid' layout: desired height for individual thumbnails (e.g., 180).\nOverrides automatic sizing. Cell width adjusts to aspect ratios.")
 
         self.timeline_options_frame = ttk.Frame(tab)
-        self.timeline_options_frame.grid(row=3, column=0, columnspan=2, sticky=tk.EW, pady=3) 
+        self.timeline_options_frame.grid(row=1, column=0, columnspan=2, sticky=tk.EW, pady=3)
         self.timeline_options_frame.columnconfigure(1, weight=1)
         lbl_row_h = ttk.Label(self.timeline_options_frame, text="Target Row Height (px):")
         lbl_row_h.grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
@@ -917,36 +925,57 @@ class MoviePrintApp:
         self.output_image_width_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
         Tooltip(self.output_image_width_entry, "Target width for the final image in 'timeline' layout.")
 
-    def _populate_styling_tab(self, tab):
-        tab.columnconfigure(1, weight=1)
+
+        # --- General Styling ---
+        lbl_pad = ttk.Label(tab, text="Padding (px):")
+        lbl_pad.grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
+        self.padding_entry = ttk.Entry(tab, textvariable=self.padding_var, width=10)
+        self.padding_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=5)
+        Tooltip(self.padding_entry, "Padding around and between thumbnails.")
+
+        lbl_bg = ttk.Label(tab, text="Background Color (hex):")
+        lbl_bg.grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
+        self.bg_color_entry = ttk.Entry(tab, textvariable=self.background_color_var, width=10)
+        self.bg_color_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=5)
+        btn_pick_color = ttk.Button(tab, text="Pick...", command=self.pick_bg_color)
+        btn_pick_color.grid(row=3, column=2, padx=5, pady=5)
+        Tooltip(self.bg_color_entry, "Hex color for the MoviePrint background (e.g., #FFFFFF or white).")
+        Tooltip(btn_pick_color, "Open color chooser dialog to select background color.")
+
+        lbl_rotate = ttk.Label(tab, text="Rotate Thumbnails:")
+        lbl_rotate.grid(row=4, column=0, sticky=tk.W, padx=5, pady=5)
+        self.rotate_combo = ttk.Combobox(tab, textvariable=self.rotate_thumbnails_var, values=[0, 90, 180, 270], state="readonly", width=8)
+        self.rotate_combo.grid(row=4, column=1, sticky=tk.W, padx=5, pady=5)
+        Tooltip(self.rotate_combo, "Rotate all thumbnails clockwise by the selected degrees (0, 90, 180, 270).")
+
 
         # Grid Margin
         lbl_grid_margin = ttk.Label(tab, text="Grid Margin:")
-        lbl_grid_margin.grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        lbl_grid_margin.grid(row=5, column=0, sticky=tk.W, padx=5, pady=2)
         self.grid_margin_entry = ttk.Entry(tab, textvariable=self.grid_margin_var, width=10)
-        self.grid_margin_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        self.grid_margin_entry.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
         Tooltip(self.grid_margin_entry, "Margin around the entire grid.")
 
         # Header Options
         self.show_header_check = ttk.Checkbutton(tab, text="Show header", variable=self.show_header_var)
-        self.show_header_check.grid(row=1, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        self.show_header_check.grid(row=6, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
         self.show_file_path_check = ttk.Checkbutton(tab, text="Show file path", variable=self.show_file_path_var)
-        self.show_file_path_check.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        self.show_file_path_check.grid(row=7, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
         self.show_timecode_check = ttk.Checkbutton(tab, text="Show timecode", variable=self.show_timecode_var)
-        self.show_timecode_check.grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        self.show_timecode_check.grid(row=8, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
         self.show_frame_num_check = ttk.Checkbutton(tab, text="Show frame number", variable=self.show_frame_num_var)
-        self.show_frame_num_check.grid(row=4, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        self.show_frame_num_check.grid(row=9, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
 
         # Rounded Corners
         lbl_rounded_corners = ttk.Label(tab, text="Rounded Corners:")
-        lbl_rounded_corners.grid(row=5, column=0, sticky=tk.W, padx=5, pady=2)
+        lbl_rounded_corners.grid(row=10, column=0, sticky=tk.W, padx=5, pady=2)
         self.rounded_corners_entry = ttk.Entry(tab, textvariable=self.rounded_corners_var, width=10)
-        self.rounded_corners_entry.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
+        self.rounded_corners_entry.grid(row=10, column=1, sticky=tk.W, padx=5, pady=2)
         Tooltip(self.rounded_corners_entry, "Radius for rounded corners on thumbnails.")
 
         # Frame Info Section
         frame_info_frame = ttk.LabelFrame(tab, text="Frame Info", padding="5")
-        frame_info_frame.grid(row=6, column=0, columnspan=2, sticky=tk.EW, pady=(10, 5))
+        frame_info_frame.grid(row=11, column=0, columnspan=2, sticky=tk.EW, pady=(10, 5))
         frame_info_frame.columnconfigure(1, weight=1)
 
         self.frame_info_show_check = ttk.Checkbutton(frame_info_frame, text="Show Frame Info", variable=self.frame_info_show_var)
@@ -982,86 +1011,72 @@ class MoviePrintApp:
         self.frame_info_margin_entry = ttk.Entry(frame_info_frame, textvariable=self.frame_info_margin_var, width=10)
         self.frame_info_margin_entry.grid(row=6, column=1, sticky=tk.W, padx=5, pady=2)
 
-    def _populate_batch_output_tab(self, tab):
-        # ... (content as before) ...
+
+    def _populate_output_advanced_settings(self, tab):
         tab.columnconfigure(1, weight=1)
         lbl_out_fname = ttk.Label(tab, text="Output Filename (single input):")
         lbl_out_fname.grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
         self.output_filename_entry = ttk.Entry(tab, textvariable=self.output_filename_var, width=40)
         self.output_filename_entry.grid(row=0, column=1, sticky=tk.EW, padx=5, pady=5)
         Tooltip(self.output_filename_entry, "Specific filename if only one input file is processed.\nOtherwise, filenames are auto-generated using the suffix below.")
+
         lbl_out_suffix = ttk.Label(tab, text="Output Suffix (batch mode):")
         lbl_out_suffix.grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
         self.output_filename_suffix_entry = ttk.Entry(tab, textvariable=self.output_filename_suffix_var, width=20)
         self.output_filename_suffix_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
         Tooltip(self.output_filename_suffix_entry, "Suffix for auto-generated filenames in batch mode (e.g., '_movieprint').")
+
         lbl_vid_ext = ttk.Label(tab, text="Video Extensions (batch scan):")
         lbl_vid_ext.grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
         self.video_extensions_entry = ttk.Entry(tab, textvariable=self.video_extensions_var, width=40)
         self.video_extensions_entry.grid(row=2, column=1, sticky=tk.EW, padx=5, pady=5)
         Tooltip(self.video_extensions_entry, "Comma-separated list of video extensions for directory scanning (e.g., .mp4,.avi,.mov).")
+
         self.recursive_scan_check = ttk.Checkbutton(tab, text="Recursive Directory Scan", variable=self.recursive_scan_var)
         self.recursive_scan_check.grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
         Tooltip(self.recursive_scan_check, "If checked, scan directories recursively for videos.")
 
-    def _populate_common_tab(self, tab):
-        # ... (content as before) ...
-        tab.columnconfigure(1, weight=1)
-        lbl_pad = ttk.Label(tab, text="Padding (px):")
-        lbl_pad.grid(row=0, column=0, sticky=tk.W, padx=5, pady=5)
-        self.padding_entry = ttk.Entry(tab, textvariable=self.padding_var, width=10)
-        self.padding_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=5)
-        Tooltip(self.padding_entry, "Padding around and between thumbnails.")
-        lbl_bg = ttk.Label(tab, text="Background Color (hex):")
-        lbl_bg.grid(row=1, column=0, sticky=tk.W, padx=5, pady=5)
-        self.bg_color_entry = ttk.Entry(tab, textvariable=self.background_color_var, width=10)
-        self.bg_color_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=5)
-        btn_pick_color = ttk.Button(tab, text="Pick...", command=self.pick_bg_color)
-        btn_pick_color.grid(row=1, column=2, padx=5, pady=5)
-        Tooltip(self.bg_color_entry, "Hex color for the MoviePrint background (e.g., #FFFFFF or white).")
-        Tooltip(btn_pick_color, "Open color chooser dialog to select background color.")
         lbl_frame_fmt = ttk.Label(tab, text="Frame Format (temp):")
-        lbl_frame_fmt.grid(row=2, column=0, sticky=tk.W, padx=5, pady=5)
+        lbl_frame_fmt.grid(row=4, column=0, sticky=tk.W, padx=5, pady=5)
         self.frame_format_combo = ttk.Combobox(tab, textvariable=self.frame_format_var, values=["jpg", "png"], state="readonly", width=8)
-        self.frame_format_combo.grid(row=2, column=1, sticky=tk.W, padx=5, pady=5)
+        self.frame_format_combo.grid(row=4, column=1, sticky=tk.W, padx=5, pady=5)
         Tooltip(self.frame_format_combo, "Format for temporary extracted frame images (jpg or png).")
-        lbl_rotate = ttk.Label(tab, text="Rotate Thumbnails:")
-        lbl_rotate.grid(row=3, column=0, sticky=tk.W, padx=5, pady=5)
-        self.rotate_combo = ttk.Combobox(tab, textvariable=self.rotate_thumbnails_var, values=[0, 90, 180, 270], state="readonly", width=8)
-        self.rotate_combo.grid(row=3, column=1, sticky=tk.W, padx=5, pady=5)
-        Tooltip(self.rotate_combo, "Rotate all thumbnails clockwise by the selected degrees (0, 90, 180, 270).")
+
         lbl_temp_dir = ttk.Label(tab, text="Custom Temp Directory:")
-        lbl_temp_dir.grid(row=4, column=0, sticky=tk.W, padx=5, pady=5)
+        lbl_temp_dir.grid(row=5, column=0, sticky=tk.W, padx=5, pady=5)
         self.temp_dir_entry = ttk.Entry(tab, textvariable=self.temp_dir_var, width=40)
-        self.temp_dir_entry.grid(row=4, column=1, sticky=tk.EW, padx=5, pady=5)
+        self.temp_dir_entry.grid(row=5, column=1, sticky=tk.EW, padx=5, pady=5)
         btn_browse_temp = ttk.Button(tab, text="Browse...", command=lambda: self.browse_specific_dir(self.temp_dir_var, "Select Custom Temporary Directory"))
-        btn_browse_temp.grid(row=4, column=2, padx=5, pady=5)
+        btn_browse_temp.grid(row=5, column=2, padx=5, pady=5)
         Tooltip(self.temp_dir_entry, "Optional. If set, temporary frames will be stored here and NOT auto-cleaned.")
         Tooltip(btn_browse_temp, "Browse for a custom temporary directory.")
+
         lbl_haar = ttk.Label(tab, text="Haar Cascade XML:")
-        lbl_haar.grid(row=5, column=0, sticky=tk.W, padx=5, pady=5)
+        lbl_haar.grid(row=6, column=0, sticky=tk.W, padx=5, pady=5)
         self.haar_cascade_entry = ttk.Entry(tab, textvariable=self.haar_cascade_xml_var, width=40)
-        self.haar_cascade_entry.grid(row=5, column=1, sticky=tk.EW, padx=5, pady=5)
+        self.haar_cascade_entry.grid(row=6, column=1, sticky=tk.EW, padx=5, pady=5)
         btn_browse_haar = ttk.Button(tab, text="Browse...", command=lambda: self.browse_specific_file(self.haar_cascade_xml_var, "Select Haar Cascade XML", (("XML files", "*.xml"),("All files", "*.*"))))
-        btn_browse_haar.grid(row=5, column=2, padx=5, pady=5)
+        btn_browse_haar.grid(row=6, column=2, padx=5, pady=5)
         Tooltip(self.haar_cascade_entry, "Optional. Path to Haar Cascade XML for face detection.\nUses OpenCV default if empty and face detection is enabled.")
         Tooltip(btn_browse_haar, "Browse for a Haar Cascade XML file.")
+
         self.save_metadata_check = ttk.Checkbutton(tab, text="Save Metadata JSON", variable=self.save_metadata_json_var)
-        self.save_metadata_check.grid(row=6, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        self.save_metadata_check.grid(row=7, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
         Tooltip(self.save_metadata_check, "Save a JSON file with detailed metadata alongside the MoviePrint.")
+
         self.detect_faces_check = ttk.Checkbutton(tab, text="Detect Faces (slow)", variable=self.detect_faces_var)
-        self.detect_faces_check.grid(row=7, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        self.detect_faces_check.grid(row=8, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
         Tooltip(self.detect_faces_check, "Enable face detection on thumbnails. This can be performance intensive.")
 
         lbl_max_filesize = ttk.Label(tab, text="Max Output Filesize (KB):")
-        lbl_max_filesize.grid(row=8, column=0, sticky=tk.W, padx=5, pady=5)
+        lbl_max_filesize.grid(row=9, column=0, sticky=tk.W, padx=5, pady=5)
         self.max_output_filesize_entry = ttk.Entry(tab, textvariable=self.max_output_filesize_kb_var, width=10)
-        self.max_output_filesize_entry.grid(row=8, column=1, sticky=tk.W, padx=5, pady=5)
+        self.max_output_filesize_entry.grid(row=9, column=1, sticky=tk.W, padx=5, pady=5)
         Tooltip(self.max_output_filesize_entry, "Attempt to reduce the final MoviePrint so its file size does not exceed this value. Leave blank for no limit.")
 
         # Add Reset to Defaults button
         btn_reset_defaults = ttk.Button(tab, text="Reset All Settings to Defaults", command=self.confirm_reset_all_settings)
-        btn_reset_defaults.grid(row=9, column=0, columnspan=3, sticky=tk.W, padx=5, pady=20) # columnspan to fit button text
+        btn_reset_defaults.grid(row=10, column=0, columnspan=3, sticky=tk.W, padx=5, pady=20) # columnspan to fit button text
         Tooltip(btn_reset_defaults, "Resets all settings in the GUI to their original default values. Input/Output paths are not reset.")
 
 
