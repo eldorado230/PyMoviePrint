@@ -169,10 +169,118 @@ class CollapsibleFrame(ttk.Frame):
 
 
 class MoviePrintApp:
+    def _apply_theme(self):
+        self.root.configure(bg="#1e1e1e")
+        style = ttk.Style()
+        style.theme_use('clam')
+
+        # --- COLOR DEFINITIONS ---
+        BG_COLOR = "#1e1e1e"
+        FG_COLOR = "#e0e0e0"
+        BORDER_COLOR = "#333333"
+        SELECT_BG = "#2a2a2a"
+        SELECT_FG = "#ffffff"
+        TEAL_ACCENT = "#009688"
+        TEAL_ACTIVE = "#00796b"
+        ENTRY_BG = "#252525"
+
+        # --- WIDGET STYLES ---
+        style.configure(".",
+                        background=BG_COLOR,
+                        foreground=FG_COLOR,
+                        fieldbackground=ENTRY_BG,
+                        borderwidth=1,
+                        relief=tk.FLAT)
+
+        style.map(".",
+                  foreground=[('disabled', '#666666'),
+                              ('active', SELECT_FG)],
+                  background=[('disabled', '#333333')],
+                  fieldbackground=[('disabled', '#333333')])
+
+        style.configure("TFrame", background=BG_COLOR)
+        style.configure("TLabel", background=BG_COLOR, foreground=FG_COLOR, padding=3)
+        style.configure("TButton",
+                        background=TEAL_ACCENT,
+                        foreground=SELECT_FG,
+                        bordercolor=TEAL_ACCENT,
+                        padding=(8, 4),
+                        font=('Helvetica', 10, 'bold'))
+        style.map("TButton",
+                  background=[('active', TEAL_ACTIVE), ('pressed', TEAL_ACTIVE)],
+                  relief=[('pressed', 'sunken')])
+
+        style.configure("TEntry",
+                        fieldbackground=ENTRY_BG,
+                        foreground=FG_COLOR,
+                        insertcolor=FG_COLOR,
+                        bordercolor=BORDER_COLOR)
+        style.map("TEntry",
+                  bordercolor=[('focus', TEAL_ACCENT)],
+                  fieldbackground=[('readonly', '#333333')])
+
+        style.configure("TCombobox",
+                        fieldbackground=ENTRY_BG,
+                        foreground=FG_COLOR,
+                        bordercolor=BORDER_COLOR,
+                        arrowcolor=TEAL_ACCENT)
+        style.map("TCombobox",
+                  fieldbackground=[('readonly', ENTRY_BG)],
+                  selectbackground=[('readonly', SELECT_BG)],
+                  selectforeground=[('readonly', SELECT_FG)])
+
+        style.configure("TCheckbutton",
+                        indicatorbackground=ENTRY_BG,
+                        indicatorforeground=FG_COLOR,
+                        padding=5)
+        style.map("TCheckbutton",
+                  indicatorbackground=[('selected', TEAL_ACCENT), ('active', '#2a2a2a')])
+
+        style.configure("TLabelframe",
+                        bordercolor=BORDER_COLOR,
+                        background=BG_COLOR)
+        style.configure("TLabelframe.Label",
+                        foreground=TEAL_ACCENT,
+                        background=BG_COLOR,
+                        font=('Helvetica', 11, 'bold'))
+
+        style.configure("Vertical.TScrollbar",
+                        background=BG_COLOR,
+                        troughcolor=ENTRY_BG,
+                        bordercolor=BG_COLOR,
+                        arrowcolor=FG_COLOR)
+        style.map("Vertical.TScrollbar",
+                  background=[('active', TEAL_ACCENT)],
+                  arrowcolor=[('active', SELECT_FG)])
+
+        style.configure("Horizontal.TScrollbar",
+                        background=BG_COLOR,
+                        troughcolor=ENTRY_BG,
+                        bordercolor=BG_COLOR,
+                        arrowcolor=FG_COLOR)
+        style.map("Horizontal.TScrollbar",
+                  background=[('active', TEAL_ACCENT)],
+                  arrowcolor=[('active', SELECT_FG)])
+
+        style.configure("TProgressbar",
+                        troughcolor=ENTRY_BG,
+                        background=TEAL_ACCENT,
+                        bordercolor=BORDER_COLOR)
+
+        style.configure("Collapsible.TButton",
+                        font=('Helvetica', 10, 'bold'),
+                        background=SELECT_BG,
+                        foreground=TEAL_ACCENT)
+        style.map("Collapsible.TButton",
+                  background=[('active', '#3a3a3a')])
+
+
     def __init__(self):
         self.root = TkinterDnD.Tk()
         self.root.title(f"MoviePrint Generator v{__version__}")
-        self.root.geometry("1200x800") # Start with a larger window
+        self.root.geometry("1500x900") # Start with a larger window
+
+        self._apply_theme()
 
         self._internal_input_paths = [] # Initialize for drag-and-drop and settings load
         self.thumbnail_images = [] # To store PhotoImage objects for preview
@@ -197,7 +305,7 @@ class MoviePrintApp:
             "target_row_height_var": "150", # Used in timeline
             "output_image_width_var": "1920", # Used in timeline
             "padding_var": "5",
-            "background_color_var": "#FFFFFF",
+            "background_color_var": "#1e1e1e",
             "frame_format_var": "jpg",
             "save_metadata_json_var": True,
             "detect_faces_var": False,
@@ -217,6 +325,21 @@ class MoviePrintApp:
             "target_thumbnail_height_var": "",
             "max_output_filesize_kb_var": "",
             "preview_quality_var": 75,
+            # Styling
+            "grid_margin_var": "0",
+            "show_header_var": True,
+            "show_file_path_var": True,
+            "show_timecode_var": True,
+            "show_frame_num_var": True,
+            "rounded_corners_var": "0",
+            # Frame info
+            "frame_info_show_var": True,
+            "frame_info_timecode_or_frame_var": "timecode",
+            "frame_info_font_color_var": "#FFFFFF",
+            "frame_info_bg_color_var": "#000000",
+            "frame_info_position_var": "bottom_left",
+            "frame_info_size_var": "10",
+            "frame_info_margin_var": "5",
         }
 
         # --- Initialize Tk Variables using default_settings ---
@@ -255,6 +378,20 @@ class MoviePrintApp:
         self.target_thumbnail_height_var = tk.StringVar(value=self.default_settings["target_thumbnail_height_var"])
         self.max_output_filesize_kb_var = tk.StringVar(value=self.default_settings["max_output_filesize_kb_var"])
         self.preview_quality_var = tk.IntVar(value=self.default_settings["preview_quality_var"])
+
+        self.grid_margin_var = tk.StringVar(value=self.default_settings["grid_margin_var"])
+        self.show_header_var = tk.BooleanVar(value=self.default_settings["show_header_var"])
+        self.show_file_path_var = tk.BooleanVar(value=self.default_settings["show_file_path_var"])
+        self.show_timecode_var = tk.BooleanVar(value=self.default_settings["show_timecode_var"])
+        self.show_frame_num_var = tk.BooleanVar(value=self.default_settings["show_frame_num_var"])
+        self.rounded_corners_var = tk.StringVar(value=self.default_settings["rounded_corners_var"])
+        self.frame_info_show_var = tk.BooleanVar(value=self.default_settings["frame_info_show_var"])
+        self.frame_info_timecode_or_frame_var = tk.StringVar(value=self.default_settings["frame_info_timecode_or_frame_var"])
+        self.frame_info_font_color_var = tk.StringVar(value=self.default_settings["frame_info_font_color_var"])
+        self.frame_info_bg_color_var = tk.StringVar(value=self.default_settings["frame_info_bg_color_var"])
+        self.frame_info_position_var = tk.StringVar(value=self.default_settings["frame_info_position_var"])
+        self.frame_info_size_var = tk.StringVar(value=self.default_settings["frame_info_size_var"])
+        self.frame_info_margin_var = tk.StringVar(value=self.default_settings["frame_info_margin_var"])
 
         # --- Load persistent settings (will override defaults if settings file exists) ---
         self._load_persistent_settings()
@@ -638,9 +775,19 @@ class MoviePrintApp:
         batch_output_frame.grid(row=2, column=0, sticky=tk.EW, pady=(0, 10))
         self._populate_batch_output_tab(batch_output_frame.get_content_frame())
 
+        # --- Styling Section ---
+        styling_frame = CollapsibleFrame(parent_frame, "Styling")
+        styling_frame.grid(row=2, column=0, sticky=tk.EW, pady=(0, 10))
+        self._populate_styling_tab(styling_frame.get_content_frame())
+
+        # --- Batch & Output Section ---
+        batch_output_frame = CollapsibleFrame(parent_frame, "Batch & Output")
+        batch_output_frame.grid(row=3, column=0, sticky=tk.EW, pady=(0, 10))
+        self._populate_batch_output_tab(batch_output_frame.get_content_frame())
+
         # --- Common & Advanced Section ---
         common_frame = CollapsibleFrame(parent_frame, "Common & Advanced")
-        common_frame.grid(row=3, column=0, sticky=tk.EW, pady=(0, 10))
+        common_frame.grid(row=4, column=0, sticky=tk.EW, pady=(0, 10))
         self._populate_common_tab(common_frame.get_content_frame())
 
 
@@ -769,6 +916,71 @@ class MoviePrintApp:
         self.output_image_width_entry = ttk.Entry(self.timeline_options_frame, textvariable=self.output_image_width_var, width=10)
         self.output_image_width_entry.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
         Tooltip(self.output_image_width_entry, "Target width for the final image in 'timeline' layout.")
+
+    def _populate_styling_tab(self, tab):
+        tab.columnconfigure(1, weight=1)
+
+        # Grid Margin
+        lbl_grid_margin = ttk.Label(tab, text="Grid Margin:")
+        lbl_grid_margin.grid(row=0, column=0, sticky=tk.W, padx=5, pady=2)
+        self.grid_margin_entry = ttk.Entry(tab, textvariable=self.grid_margin_var, width=10)
+        self.grid_margin_entry.grid(row=0, column=1, sticky=tk.W, padx=5, pady=2)
+        Tooltip(self.grid_margin_entry, "Margin around the entire grid.")
+
+        # Header Options
+        self.show_header_check = ttk.Checkbutton(tab, text="Show header", variable=self.show_header_var)
+        self.show_header_check.grid(row=1, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        self.show_file_path_check = ttk.Checkbutton(tab, text="Show file path", variable=self.show_file_path_var)
+        self.show_file_path_check.grid(row=2, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        self.show_timecode_check = ttk.Checkbutton(tab, text="Show timecode", variable=self.show_timecode_var)
+        self.show_timecode_check.grid(row=3, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+        self.show_frame_num_check = ttk.Checkbutton(tab, text="Show frame number", variable=self.show_frame_num_var)
+        self.show_frame_num_check.grid(row=4, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+
+        # Rounded Corners
+        lbl_rounded_corners = ttk.Label(tab, text="Rounded Corners:")
+        lbl_rounded_corners.grid(row=5, column=0, sticky=tk.W, padx=5, pady=2)
+        self.rounded_corners_entry = ttk.Entry(tab, textvariable=self.rounded_corners_var, width=10)
+        self.rounded_corners_entry.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
+        Tooltip(self.rounded_corners_entry, "Radius for rounded corners on thumbnails.")
+
+        # Frame Info Section
+        frame_info_frame = ttk.LabelFrame(tab, text="Frame Info", padding="5")
+        frame_info_frame.grid(row=6, column=0, columnspan=2, sticky=tk.EW, pady=(10, 5))
+        frame_info_frame.columnconfigure(1, weight=1)
+
+        self.frame_info_show_check = ttk.Checkbutton(frame_info_frame, text="Show Frame Info", variable=self.frame_info_show_var)
+        self.frame_info_show_check.grid(row=0, column=0, columnspan=2, sticky=tk.W, padx=5, pady=5)
+
+        lbl_frame_info_type = ttk.Label(frame_info_frame, text="Type:")
+        lbl_frame_info_type.grid(row=1, column=0, sticky=tk.W, padx=5, pady=2)
+        self.frame_info_type_combo = ttk.Combobox(frame_info_frame, textvariable=self.frame_info_timecode_or_frame_var, values=["timecode", "frame"], state="readonly", width=10)
+        self.frame_info_type_combo.grid(row=1, column=1, sticky=tk.W, padx=5, pady=2)
+
+        lbl_frame_info_font_color = ttk.Label(frame_info_frame, text="Font Color:")
+        lbl_frame_info_font_color.grid(row=2, column=0, sticky=tk.W, padx=5, pady=2)
+        self.frame_info_font_color_entry = ttk.Entry(frame_info_frame, textvariable=self.frame_info_font_color_var, width=10)
+        self.frame_info_font_color_entry.grid(row=2, column=1, sticky=tk.W, padx=5, pady=2)
+
+        lbl_frame_info_bg_color = ttk.Label(frame_info_frame, text="Background Color:")
+        lbl_frame_info_bg_color.grid(row=3, column=0, sticky=tk.W, padx=5, pady=2)
+        self.frame_info_bg_color_entry = ttk.Entry(frame_info_frame, textvariable=self.frame_info_bg_color_var, width=10)
+        self.frame_info_bg_color_entry.grid(row=3, column=1, sticky=tk.W, padx=5, pady=2)
+
+        lbl_frame_info_position = ttk.Label(frame_info_frame, text="Position:")
+        lbl_frame_info_position.grid(row=4, column=0, sticky=tk.W, padx=5, pady=2)
+        self.frame_info_position_combo = ttk.Combobox(frame_info_frame, textvariable=self.frame_info_position_var, values=["bottom_left", "bottom_right", "top_left", "top_right"], state="readonly", width=12)
+        self.frame_info_position_combo.grid(row=4, column=1, sticky=tk.W, padx=5, pady=2)
+
+        lbl_frame_info_size = ttk.Label(frame_info_frame, text="Size:")
+        lbl_frame_info_size.grid(row=5, column=0, sticky=tk.W, padx=5, pady=2)
+        self.frame_info_size_entry = ttk.Entry(frame_info_frame, textvariable=self.frame_info_size_var, width=10)
+        self.frame_info_size_entry.grid(row=5, column=1, sticky=tk.W, padx=5, pady=2)
+
+        lbl_frame_info_margin = ttk.Label(frame_info_frame, text="Margin:")
+        lbl_frame_info_margin.grid(row=6, column=0, sticky=tk.W, padx=5, pady=2)
+        self.frame_info_margin_entry = ttk.Entry(frame_info_frame, textvariable=self.frame_info_margin_var, width=10)
+        self.frame_info_margin_entry.grid(row=6, column=1, sticky=tk.W, padx=5, pady=2)
 
     def _populate_batch_output_tab(self, tab):
         # ... (content as before) ...
@@ -1217,6 +1429,21 @@ class MoviePrintApp:
         settings.recursive_scan = self.recursive_scan_var.get()
         settings.temp_dir = self.temp_dir_var.get() if self.temp_dir_var.get() else None
         settings.haar_cascade_xml = self.haar_cascade_xml_var.get() if self.haar_cascade_xml_var.get() else None
+
+        settings.grid_margin = int(self.grid_margin_var.get()) if self.grid_margin_var.get() else 0
+        settings.show_header = self.show_header_var.get()
+        settings.show_file_path = self.show_file_path_var.get()
+        settings.show_timecode = self.show_timecode_var.get()
+        settings.show_frame_num = self.show_frame_num_var.get()
+        settings.rounded_corners = int(self.rounded_corners_var.get()) if self.rounded_corners_var.get() else 0
+        settings.frame_info_show = self.frame_info_show_var.get()
+        settings.frame_info_timecode_or_frame = self.frame_info_timecode_or_frame_var.get()
+        settings.frame_info_font_color = self.frame_info_font_color_var.get()
+        settings.frame_info_bg_color = self.frame_info_bg_color_var.get()
+        settings.frame_info_position = self.frame_info_position_var.get()
+        settings.frame_info_size = int(self.frame_info_size_var.get()) if self.frame_info_size_var.get() else 10
+        settings.frame_info_margin = int(self.frame_info_margin_var.get()) if self.frame_info_margin_var.get() else 5
+
         max_size_str = self.max_output_filesize_kb_var.get()
         if max_size_str and max_size_str.strip():
             try:

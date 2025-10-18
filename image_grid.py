@@ -1,4 +1,4 @@
-from PIL import Image, ImageDraw, ImageColor
+from PIL import Image, ImageDraw, ImageColor, ImageFont
 import logging
 import os
 import math
@@ -47,7 +47,7 @@ def save_thumbnails(thumbnail_paths, output_dir, logger):
         return False, []
 
 
-def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, padding, background_color_rgb, logger, target_thumbnail_width=None, output_width=None, output_height=None, target_thumbnail_height=None, **kwargs):
+def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, padding, background_color_rgb, logger, target_thumbnail_width=None, output_width=None, output_height=None, target_thumbnail_height=None, grid_margin=0, rounded_corners=0, frame_info_show=True, show_header=True, show_file_path=True, show_timecode=True, show_frame_num=True, frame_info_timecode_or_frame="timecode", frame_info_font_color="#FFFFFF", frame_info_bg_color="#000000", frame_info_position="bottom_left", frame_info_size=10, frame_info_margin=5, **kwargs):
     thumbnail_layout_data = []
     if not image_objects_with_paths:
         logger.error("Error (_create_fixed_column_grid): No image objects provided.")
@@ -114,8 +114,8 @@ def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, pa
     rows = math.ceil(num_images / columns) if columns > 0 else 0
     if rows == 0 and num_images > 0 : rows = 1 # Ensure at least one row if there are images but columns is somehow 0
 
-    grid_width = (columns * cell_w) + ((columns + 1) * padding)
-    grid_height = (rows * cell_h) + ((rows + 1) * padding)
+    grid_width = (columns * cell_w) + ((columns - 1) * padding) + (2 * grid_margin)
+    grid_height = (rows * cell_h) + ((rows - 1) * padding) + (2 * grid_margin)
 
     # Ensure grid dimensions are at least padding if no images (or minimal size)
     if not image_objects:
@@ -129,11 +129,32 @@ def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, pa
         return False, thumbnail_layout_data
 
 
+    header_height = 0
+    if show_header:
+        header_height = 50 # Adjust as needed
+        grid_height += header_height
+
     grid_image = Image.new("RGB", (grid_width, grid_height), background_color_rgb)
+    draw = ImageDraw.Draw(grid_image)
+
+    if show_header:
+        try:
+            font = ImageFont.truetype("arial.ttf", 20)
+        except IOError:
+            font = ImageFont.load_default()
+        header_text = ""
+        if show_file_path:
+            header_text += f"{original_paths[0]}"
+        if show_timecode:
+            header_text += f" TC: {0}"
+        if show_frame_num:
+            header_text += f" F: {0}"
+        draw.text((grid_margin, grid_margin), header_text, font=font, fill=frame_info_font_color)
+
     logger.info(f"Creating fixed-column grid: {columns}c, {rows}r. Cell: {cell_w}x{cell_h} (target_width: {target_thumbnail_width if target_thumbnail_width else 'auto'}). Output: {grid_width}x{grid_height}px.")
 
-    current_x = padding
-    current_y = padding
+    current_x = grid_margin
+    current_y = grid_margin + header_height
     for i, img_obj in enumerate(image_objects):
         img_copy = img_obj.copy()
         # Resize an image to fit within the cell_w x cell_h box, preserving aspect ratio
@@ -146,7 +167,46 @@ def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, pa
 
         paste_x = current_x + x_offset
         paste_y = current_y + y_offset
-        grid_image.paste(img_copy, (paste_x, paste_y))
+        if frame_info_show:
+            draw = ImageDraw.Draw(img_copy)
+            try:
+                font = ImageFont.truetype("arial.ttf", frame_info_size)
+            except IOError:
+                font = ImageFont.load_default()
+
+            if frame_info_timecode_or_frame == "timecode":
+                text = f"TC: {i}"
+            else:
+                text = f"F: {i}"
+
+            text_bbox = draw.textbbox((0, 0), text, font=font)
+            text_width = text_bbox[2] - text_bbox[0]
+            text_height = text_bbox[3] - text_bbox[1]
+
+            if frame_info_position == "bottom_left":
+                text_x = frame_info_margin
+                text_y = final_h - text_height - frame_info_margin
+            elif frame_info_position == "bottom_right":
+                text_x = final_w - text_width - frame_info_margin
+                text_y = final_h - text_height - frame_info_margin
+            elif frame_info_position == "top_left":
+                text_x = frame_info_margin
+                text_y = frame_info_margin
+            else: # top_right
+                text_x = final_w - text_width - frame_info_margin
+                text_y = frame_info_margin
+
+            bg_rect = (text_x - 2, text_y - 2, text_x + text_width + 2, text_y + text_height + 2)
+            draw.rectangle(bg_rect, fill=frame_info_bg_color)
+            draw.text((text_x, text_y), text, font=font, fill=frame_info_font_color)
+
+        if rounded_corners > 0:
+            mask = Image.new('L', (final_w, final_h), 0)
+            draw = ImageDraw.Draw(mask)
+            draw.rounded_rectangle((0, 0, final_w, final_h), radius=rounded_corners, fill=255)
+            grid_image.paste(img_copy, (paste_x, paste_y), mask)
+        else:
+            grid_image.paste(img_copy, (paste_x, paste_y))
 
         thumbnail_layout_data.append({
             'image_path': original_paths[i],
@@ -156,7 +216,7 @@ def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, pa
         img_copy.close()
 
         if (i + 1) % columns == 0:
-            current_x = padding
+            current_x = grid_margin
             current_y += cell_h + padding
         else:
             current_x += cell_w + padding
@@ -294,7 +354,7 @@ def _create_timeline_view_grid(image_objects_with_paths_ratios, output_path,
 def create_image_grid(
     image_source_data, output_path, padding, logger, background_color_hex="#FFFFFF",
     layout_mode="grid", columns=None, rows=None, target_row_height=None,
-    max_grid_width=None, target_thumbnail_width=None, output_width=None, output_height=None, target_thumbnail_height=None):
+    max_grid_width=None, target_thumbnail_width=None, output_width=None, output_height=None, target_thumbnail_height=None, grid_margin=0, rounded_corners=0, frame_info_show=True, show_header=True, show_file_path=True, show_timecode=True, show_frame_num=True, frame_info_timecode_or_frame="timecode", frame_info_font_color="#FFFFFF", frame_info_bg_color="#000000", frame_info_position="bottom_left", frame_info_size=10, frame_info_margin=5):
     thumbnail_layout_data = []
     if not image_source_data:
         logger.error("No image source data provided."); return False, thumbnail_layout_data
@@ -356,7 +416,7 @@ def create_image_grid(
     # Pass **kwargs implicitly if they are expected by helpers, or remove if not used
     if layout_mode == "grid":
         success, thumbnail_layout_data = _create_fixed_column_grid(
-            processed_image_input, output_path, columns, padding, background_color_rgb, logger=logger, target_thumbnail_width=target_thumbnail_width, output_width=output_width, output_height=output_height, target_thumbnail_height=target_thumbnail_height
+            processed_image_input, output_path, columns, padding, background_color_rgb, logger=logger, target_thumbnail_width=target_thumbnail_width, output_width=output_width, output_height=output_height, target_thumbnail_height=target_thumbnail_height, grid_margin=grid_margin, rounded_corners=rounded_corners, frame_info_show=frame_info_show, show_header=show_header, show_file_path=show_file_path, show_timecode=show_timecode, show_frame_num=show_frame_num, frame_info_timecode_or_frame=frame_info_timecode_or_frame, frame_info_font_color=frame_info_font_color, frame_info_bg_color=frame_info_bg_color, frame_info_position=frame_info_position, frame_info_size=frame_info_size, frame_info_margin=frame_info_margin
         )
     elif layout_mode == "timeline":
         success, thumbnail_layout_data = _create_timeline_view_grid(

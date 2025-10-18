@@ -62,7 +62,20 @@ class TestMovieprintMaker(unittest.TestCase):
             recursive_scan=False,
             temp_dir=None,
             haar_cascade_xml=None,
-            max_output_filesize_kb=None
+            max_output_filesize_kb=None,
+            grid_margin=0,
+            show_header=True,
+            show_file_path=True,
+            show_timecode=True,
+            show_frame_num=True,
+            rounded_corners=0,
+            frame_info_show=True,
+            frame_info_timecode_or_frame="timecode",
+            frame_info_font_color="#FFFFFF",
+            frame_info_bg_color="#000000",
+            frame_info_position="bottom_left",
+            frame_info_size=10,
+            frame_info_margin=5
         )
         successful_ops, failed_ops = execute_movieprint_generation(settings, self.logger)
         self.assertEqual(len(successful_ops), 1)
