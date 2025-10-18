@@ -107,16 +107,17 @@ class ZoomableCanvas(ttk.Frame):
         self.grid_columnconfigure(0, weight=1)
 
         self.image_id = None
-        self.image = None
+        self.original_image = None # Stores the original, unscaled image
         self.photo_image = None
+        self._zoom_level = 1.0
 
         # Bind events
         self.canvas.bind("<ButtonPress-1>", self.on_button_press)
         self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
         self.canvas.bind("<ButtonRelease-1>", self.on_button_release)
-        self.canvas.bind("<MouseWheel>", self.on_mouse_wheel) # Windows/macOS
-        self.canvas.bind("<Button-4>", self.on_mouse_wheel)  # Linux scroll up
-        self.canvas.bind("<Button-5>", self.on_mouse_wheel)  # Linux scroll down
+        # self.canvas.bind("<MouseWheel>", self.on_mouse_wheel) # Windows/macOS
+        # self.canvas.bind("<Button-4>", self.on_mouse_wheel)  # Linux scroll up
+        # self.canvas.bind("<Button-5>", self.on_mouse_wheel)  # Linux scroll down
 
     def on_button_press(self, event):
         if self.app_ref.is_scrubbing_active():
@@ -155,17 +156,44 @@ class ZoomableCanvas(ttk.Frame):
         # Re-center the view after scaling
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
+    def set_zoom(self, scale_level_str):
+        scale_level = float(scale_level_str)
+        if self._zoom_level == scale_level:
+            return
+        self._zoom_level = scale_level
+        self._apply_zoom()
+
+    def _apply_zoom(self):
+        if not self.original_image or not self.image_id:
+            return
+
+        new_width = int(self.original_image.width * self._zoom_level)
+        new_height = int(self.original_image.height * self._zoom_level)
+
+        # Ensure dimensions are at least 1x1
+        if new_width < 1: new_width = 1
+        if new_height < 1: new_height = 1
+
+        # Use a high-quality downsampling filter for zooming out, and a faster one for zooming in
+        resample_filter = Image.Resampling.LANCZOS if self._zoom_level < 1.0 else Image.Resampling.NEAREST
+        zoomed_image = self.original_image.resize((new_width, new_height), resample_filter)
+        self.photo_image = ImageTk.PhotoImage(zoomed_image)
+        self.canvas.itemconfig(self.image_id, image=self.photo_image)
+        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+
+
     def set_image(self, image_path):
         if not image_path or not os.path.exists(image_path):
             self.clear()
             return
-
         try:
-            self.image = Image.open(image_path)
-            self.photo_image = ImageTk.PhotoImage(self.image)
+            self.original_image = Image.open(image_path)
+            # Reset zoom to 1.0 whenever a new image is loaded
+            self.app_ref.zoom_level_var.set(1.0)
+            self._zoom_level = 1.0
+            self.photo_image = ImageTk.PhotoImage(self.original_image)
             if self.image_id:
                 self.canvas.delete(self.image_id)
-
             self.image_id = self.canvas.create_image(0, 0, anchor="nw", image=self.photo_image)
             self.canvas.configure(scrollregion=self.canvas.bbox(self.image_id))
         except Exception as e:
@@ -176,7 +204,7 @@ class ZoomableCanvas(ttk.Frame):
         if self.image_id:
             self.canvas.delete(self.image_id)
         self.image_id = None
-        self.image = None
+        self.original_image = None
         self.photo_image = None
         self.canvas.configure(scrollregion=(0,0,0,0))
 
@@ -499,6 +527,14 @@ class MoviePrintApp:
 
         self.preview_zoomable_canvas = ZoomableCanvas(preview_frame, app_ref=self)
         self.preview_zoomable_canvas.grid(row=0, column=0, sticky="nsew")
+
+        # --- NEW: Zoom Slider ---
+        self.zoom_level_var = tk.DoubleVar(value=1.0)
+        self.zoom_slider = ttk.Scale(preview_frame, from_=0.1, to=5.0, orient=tk.HORIZONTAL,
+                                     variable=self.zoom_level_var, command=self.preview_zoomable_canvas.set_zoom)
+        self.zoom_slider.grid(row=1, column=0, sticky="ew", pady=(5,0))
+        Tooltip(self.zoom_slider, "Drag to zoom the preview image in or out.")
+        # --- END NEW ---
 
         self._populate_settings_sidebar(self.settings_frame)
 
@@ -1394,7 +1430,7 @@ class MoviePrintApp:
                 elif message_type == "preview_grid":
                     self._display_thumbnail_preview(data)
                 elif message_type == "update_thumbnail":
-                    self.update_thumbnail_in_preview(data['index'], data['image_path'])
+                    self.update_thumbnail_in_preview(data['index'], data['image'])
                 self.root.update_idletasks()
         except queue.Empty: pass
         self.root.after(100, self.check_queue)
@@ -1646,22 +1682,29 @@ class MoviePrintApp:
             self.scrubbing_handler.stop(event)
 
     def update_thumbnail_in_preview(self, index, new_thumb_img):
-        if not self.preview_zoomable_canvas.image or index >= len(self.thumbnail_layout_data):
+        canvas_handler = self.preview_zoomable_canvas
+        if not canvas_handler.original_image or index >= len(self.thumbnail_layout_data):
             self.queue.put(("log", f"Error: Cannot update thumbnail. Preview image or layout data missing."))
+            if new_thumb_img: new_thumb_img.close()
             return
 
         try:
             thumb_info = self.thumbnail_layout_data[index]
+            # Create a resized version of the new thumbnail that matches the layout dimensions
             resized_thumb = new_thumb_img.resize((thumb_info['width'], thumb_info['height']), Image.Resampling.LANCZOS)
 
-            self.preview_zoomable_canvas.image.paste(resized_thumb, (thumb_info['x'], thumb_info['y']))
+            # Paste this new thumbnail onto the original, unscaled grid image
+            canvas_handler.original_image.paste(resized_thumb, (thumb_info['x'], thumb_info['y']))
 
-            self.preview_zoomable_canvas.photo_image = ImageTk.PhotoImage(self.preview_zoomable_canvas.image)
-            self.preview_zoomable_canvas.canvas.itemconfig(self.preview_zoomable_canvas.image_id, image=self.preview_zoomable_canvas.photo_image)
-            new_thumb_img.close()
-            resized_thumb.close()
+            # Now, re-apply the current zoom level, which will regenerate the displayed photo_image
+            canvas_handler._apply_zoom()
+
         except Exception as e:
             self.queue.put(("log", f"Error updating thumbnail in preview: {e}"))
+        finally:
+            # Clean up the passed image object
+            if new_thumb_img: new_thumb_img.close()
+            if 'resized_thumb' in locals() and resized_thumb: resized_thumb.close()
 
     def update_options_visibility(self, event=None): 
         # ... (content as before, ensure row numbers are correct) ...
