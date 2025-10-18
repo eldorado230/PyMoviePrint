@@ -13,7 +13,7 @@ from PIL import Image
 
 try:
     import video_processing
-    import image_grid 
+    import image_grid
 except ImportError as e:
     print(f"Error importing modules: {e}")
     print("Please ensure 'video_processing.py' and 'image_grid.py' are in the same directory"
@@ -98,284 +98,297 @@ def enforce_max_filesize(image_path, target_kb, logger):
         logger.error(f"  Error reducing file size for {image_path}: {e}")
 
 
-def process_single_video(video_file_path, settings, effective_output_filename, logger):
-    def log_callback(message, level="info"): # Renamed from local logger to log_callback for clarity
-        if level == "warning": logger.warning(message)
-        elif level == "error": logger.error(message)
-        elif level == "exception": logger.exception(message)
-        else: logger.info(message)
-    
-    log_callback(f"\nProcessing video: {video_file_path}...")
-
-    start_time_sec = parse_time_to_seconds(settings.start_time)
-    end_time_sec = parse_time_to_seconds(settings.end_time)
-
-    if settings.start_time is not None and start_time_sec is None:
-        return False, f"Invalid --start_time format: '{settings.start_time}'."
-    if settings.end_time is not None and end_time_sec is None:
-        return False, f"Invalid --end_time format: '{settings.end_time}'."
-    if start_time_sec is not None and end_time_sec is not None and start_time_sec >= end_time_sec:
-        return False, f"Error: --start_time must be less than --end_time."
-    
-    temp_frames_output_folder = settings.temp_dir
-    cleanup_temp_dir_for_this_video = False
-    if temp_frames_output_folder:
+def _setup_temp_directory(video_file_path, settings, logger):
+    """Handles creation of the temporary directory for frames."""
+    if settings.temp_dir:
         video_basename = os.path.splitext(os.path.basename(video_file_path))[0]
-        temp_frames_output_folder = os.path.join(temp_frames_output_folder, f"movieprint_temp_{video_basename}")
-        if not os.path.exists(temp_frames_output_folder):
-            try: os.makedirs(temp_frames_output_folder)
-            except OSError as e: return False, f"Error creating temp sub-dir {temp_frames_output_folder}: {e}"
+        temp_dir = os.path.join(settings.temp_dir, f"movieprint_temp_{video_basename}")
+        if not os.path.exists(temp_dir):
+            try:
+                os.makedirs(temp_dir)
+            except OSError as e:
+                return None, False, f"Error creating temp sub-dir {temp_dir}: {e}"
+        return temp_dir, False, None  # Don't cleanup user-provided dir
     else:
-        temp_frames_output_folder = tempfile.mkdtemp(prefix=f"movieprint_{os.path.splitext(os.path.basename(video_file_path))[0]}_")
-        cleanup_temp_dir_for_this_video = True
-    logger.info(f"  Using temporary directory for frames: {temp_frames_output_folder}")
+        try:
+            temp_dir = tempfile.mkdtemp(prefix=f"movieprint_{os.path.splitext(os.path.basename(video_file_path))[0]}_")
+            logger.info(f"  Using temporary directory for frames: {temp_dir}")
+            return temp_dir, True, None  # Cleanup this dir
+        except Exception as e:
+            return None, False, f"Error creating temporary directory: {e}"
 
-    extraction_ok = False
-    source_frame_metadata_list = [] 
-    
-    # Pass logger to video_processing functions
+
+def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, logger):
+    """Extracts frames from the video based on settings."""
     if settings.extraction_mode == "interval":
-        extraction_ok, source_frame_metadata_list = video_processing.extract_frames(
-            video_path=video_file_path, output_folder=temp_frames_output_folder,
+        return video_processing.extract_frames(
+            video_path=video_file_path, output_folder=temp_dir,
             interval_seconds=settings.interval_seconds, interval_frames=settings.interval_frames,
             output_format=settings.frame_format,
-            start_time_sec=start_time_sec, end_time_sec=end_time_sec,
-            logger=logger 
-        )
-    elif settings.extraction_mode == "shot":
-        extraction_ok, source_frame_metadata_list = video_processing.extract_shot_boundary_frames(
-            video_path=video_file_path, output_folder=temp_frames_output_folder,
-            output_format=settings.frame_format, detector_threshold=settings.shot_threshold,
-            start_time_sec=start_time_sec, end_time_sec=end_time_sec,
+            start_time_sec=start_sec, end_time_sec=end_sec,
             logger=logger
         )
+    elif settings.extraction_mode == "shot":
+        return video_processing.extract_shot_boundary_frames(
+            video_path=video_file_path, output_folder=temp_dir,
+            output_format=settings.frame_format, detector_threshold=settings.shot_threshold,
+            start_time_sec=start_sec, end_time_sec=end_sec,
+            logger=logger
+        )
+    return False, []
 
-    if not extraction_ok: 
-        message = f"Frame extraction failed for {video_file_path}."
-        if cleanup_temp_dir_for_this_video and os.path.exists(temp_frames_output_folder):
-            try: shutil.rmtree(temp_frames_output_folder); message += " Temp dir cleaned."
-            except Exception as e: message += f" Error cleaning temp dir: {e}"
-        return False, message
 
-    initial_thumb_count = len(source_frame_metadata_list)
-    excluded_items_info_for_log = [] 
+def _apply_exclusions(metadata_list, settings, logger):
+    """Applies frame or shot exclusions based on settings."""
+    initial_count = len(metadata_list)
+    excluded_items_log = []
 
     if settings.extraction_mode == 'interval' and settings.exclude_frames:
-        frames_to_exclude_set = set(settings.exclude_frames)
-        original_frame_numbers = {item['frame_number'] for item in source_frame_metadata_list}
-        not_found_exclusions = frames_to_exclude_set - original_frame_numbers
-        if not_found_exclusions:
-            msg = f"  Warning: Requested frames to exclude not found: {sorted(list(not_found_exclusions))}"
-            logger.warning(msg); excluded_items_info_for_log.append(msg)
-        source_frame_metadata_list = [item for item in source_frame_metadata_list if item['frame_number'] not in frames_to_exclude_set]
-        if len(source_frame_metadata_list) < initial_thumb_count:
-             excluded_items_info_for_log.extend([f"excluded_frame_num:{fn}" for fn in frames_to_exclude_set if fn in original_frame_numbers])
+        exclude_set = set(settings.exclude_frames)
+        original_frames = {item['frame_number'] for item in metadata_list}
+        not_found = exclude_set - original_frames
+        if not_found:
+            msg = f"  Warning: Requested frames to exclude not found: {sorted(list(not_found))}"
+            logger.warning(msg)
+            excluded_items_log.append(msg)
+        metadata_list = [item for item in metadata_list if item['frame_number'] not in exclude_set]
+        if len(metadata_list) < initial_count:
+            excluded_items_log.extend([f"excluded_frame_num:{fn}" for fn in exclude_set if fn in original_frames])
+
     elif settings.extraction_mode == 'shot' and settings.exclude_shots:
-        shots_to_exclude_0_based_set = {idx - 1 for idx in settings.exclude_shots}
-        valid_indices_to_exclude = []
-        temp_filtered_list = []
-        for i, item in enumerate(source_frame_metadata_list):
-            if i not in shots_to_exclude_0_based_set: temp_filtered_list.append(item)
-            else: valid_indices_to_exclude.append(i + 1)
-        source_frame_metadata_list = temp_filtered_list
-        for requested_idx_1_based in settings.exclude_shots:
-            if requested_idx_1_based -1 >= initial_thumb_count or requested_idx_1_based <=0 :
-                msg = f"  Warning: Shot index {requested_idx_1_based} out of range (1-{initial_thumb_count})."
-                logger.warning(msg); excluded_items_info_for_log.append(msg)
-            elif requested_idx_1_based in valid_indices_to_exclude:
-                 excluded_items_info_for_log.append(f"excluded_shot_idx:{requested_idx_1_based}")
+        exclude_set_0based = {idx - 1 for idx in settings.exclude_shots}
+        valid_excluded = []
+        temp_list = []
+        for i, item in enumerate(metadata_list):
+            if i not in exclude_set_0based:
+                temp_list.append(item)
+            else:
+                valid_excluded.append(i + 1)
+        metadata_list = temp_list
+        for req_idx in settings.exclude_shots:
+            if req_idx - 1 >= initial_count or req_idx <= 0:
+                msg = f"  Warning: Shot index {req_idx} out of range (1-{initial_count})."
+                logger.warning(msg)
+                excluded_items_log.append(msg)
+            elif req_idx in valid_excluded:
+                excluded_items_log.append(f"excluded_shot_idx:{req_idx}")
 
-    if initial_thumb_count > 0 and len(source_frame_metadata_list) < initial_thumb_count:
-        logger.info(f"  Applied exclusions: {initial_thumb_count - len(source_frame_metadata_list)} thumbnails removed. {len(source_frame_metadata_list)} remaining.")
+    if len(metadata_list) < initial_count:
+        logger.info(f"  Applied exclusions: {initial_count - len(metadata_list)} thumbnails removed. {len(metadata_list)} remaining.")
+
+    return metadata_list, excluded_items_log
 
 
-    # --- NEW: Frame Count Limiting for Grid Mode ---
-    if settings.layout_mode == "grid" and hasattr(settings, 'max_frames_for_print') and \
-       settings.max_frames_for_print is not None and \
-       len(source_frame_metadata_list) > settings.max_frames_for_print:
-        
-        num_to_select = settings.max_frames_for_print
-        original_count = len(source_frame_metadata_list)
-        logger.info(f"  Limiting {original_count} extracted frames to a maximum of {num_to_select} for the print.")
-        
-        # Simple selection: pick frames evenly spaced from the original list
-        indices_to_pick = [int(i * (original_count -1) / (num_to_select -1)) for i in range(num_to_select)]
-        if num_to_select == 1 and original_count > 0: # Edge case for selecting only 1 frame
-            indices_to_pick = [0] 
-        
-        selected_frames_metadata = [source_frame_metadata_list[i] for i in sorted(list(set(indices_to_pick)))] # set to remove duplicates if any from calculation
-        
-        # Ensure we don't exceed the target due to rounding or selection logic, trim if necessary
-        if len(selected_frames_metadata) > num_to_select:
-            selected_frames_metadata = selected_frames_metadata[:num_to_select]
+def _limit_frames_for_grid(metadata_list, settings, temp_dir, cleanup_temp, logger):
+    """Limits the number of frames for the grid layout if max_frames is set."""
+    if settings.layout_mode != "grid" or not hasattr(settings, 'max_frames_for_print') or \
+            settings.max_frames_for_print is None or len(metadata_list) <= settings.max_frames_for_print:
+        return metadata_list
 
-        # Cleanup unselected frames if they are temporary (this part is tricky if temp_dir is user-specified not to be cleaned)
-        if cleanup_temp_dir_for_this_video: # Only attempt if we created this temp_dir
-            frames_to_keep_paths = {meta['frame_path'] for meta in selected_frames_metadata}
-            all_extracted_paths_in_temp = glob.glob(os.path.join(temp_frames_output_folder, f"*.{settings.frame_format}"))
-            for temp_frame_path in all_extracted_paths_in_temp:
-                if temp_frame_path not in frames_to_keep_paths:
-                    try:
-                        os.remove(temp_frame_path)
-                        # logger.debug(f"    Removed unselected temp frame: {temp_frame_path}") # Optional: too verbose for info
-                    except OSError as e:
-                        logger.warning(f"    Could not remove unselected temp frame {temp_frame_path}: {e}")
-        
-        source_frame_metadata_list = selected_frames_metadata
-        logger.info(f"  Selected {len(source_frame_metadata_list)} frames to proceed with grid generation.")
-    # --- END NEW: Frame Count Limiting ---
+    num_to_select = settings.max_frames_for_print
+    original_count = len(metadata_list)
+    logger.info(f"  Limiting {original_count} extracted frames to a maximum of {num_to_select} for the print.")
 
+    indices_to_pick = [int(i * (original_count - 1) / (num_to_select - 1)) for i in range(num_to_select)]
+    if num_to_select == 1 and original_count > 0:
+        indices_to_pick = [0]
+
+    selected_metadata = [metadata_list[i] for i in sorted(list(set(indices_to_pick)))]
+    if len(selected_metadata) > num_to_select:
+        selected_metadata = selected_metadata[:num_to_select]
+
+    if cleanup_temp:
+        frames_to_keep_paths = {meta['frame_path'] for meta in selected_metadata}
+        all_temp_paths = glob.glob(os.path.join(temp_dir, f"*.{settings.frame_format}"))
+        for path in all_temp_paths:
+            if path not in frames_to_keep_paths:
+                try:
+                    os.remove(path)
+                except OSError as e:
+                    logger.warning(f"    Could not remove unselected temp frame {path}: {e}")
+
+    logger.info(f"  Selected {len(selected_metadata)} frames to proceed with grid generation.")
+    return selected_metadata
+
+
+def _process_thumbnails(metadata_list, settings, logger):
+    """Applies transformations like face detection and rotation to thumbnails."""
+    # Face detection
     face_cascade = None
     if settings.detect_faces:
-        haar_cascade_path = settings.haar_cascade_xml if settings.haar_cascade_xml else os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
-        if not os.path.exists(haar_cascade_path):
-            msg = f"  Warning: Haar Cascade XML not found at '{haar_cascade_path}'. Face detection skipped."
-            logger.warning(msg); excluded_items_info_for_log.append(msg)
+        cascade_path = settings.haar_cascade_xml or os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
+        if not os.path.exists(cascade_path):
+            logger.warning(f"  Warning: Haar Cascade XML not found at '{cascade_path}'. Face detection skipped.")
         else:
-            face_cascade = cv2.CascadeClassifier(haar_cascade_path)
+            face_cascade = cv2.CascadeClassifier(cascade_path)
             if face_cascade.empty():
-                msg = f"  Warning: Failed to load Haar Cascade XML from '{haar_cascade_path}'. Face detection skipped."
-                logger.warning(msg); excluded_items_info_for_log.append(msg); face_cascade = None
-            else: logger.info(f"  Face detection enabled using: {haar_cascade_path}")
+                logger.warning(f"  Warning: Failed to load Haar Cascade from '{cascade_path}'. Face detection skipped.")
+                face_cascade = None
+            else:
+                logger.info(f"  Face detection enabled using: {cascade_path}")
 
     if face_cascade:
         logger.info("  Performing face detection on thumbnails...")
-        for item_meta in source_frame_metadata_list:
+        for meta in metadata_list:
             try:
-                frame_image = cv2.imread(item_meta['frame_path'])
-                if frame_image is None: logger.warning(f"    Could not read {item_meta['frame_path']} for face detection."); continue
-                gray_image = cv2.cvtColor(frame_image, cv2.COLOR_BGR2GRAY)
-                faces = face_cascade.detectMultiScale(gray_image, scaleFactor=1.1, minNeighbors=4, minSize=(20, 20))
-                item_meta['face_detection'] = {'num_faces': len(faces), 'face_bboxes_thumbnail': [list(f) for f in faces]}
-                if len(faces) > 0: logger.info(f"    Detected {len(faces)} face(s) in thumbnail from frame {item_meta.get('frame_number', item_meta.get('start_frame', 'N/A'))}")
-            except Exception as e: log_callback(f"    Error during face detection for {item_meta['frame_path']}: {e}"); item_meta['face_detection'] = {'error': str(e)}
+                frame_img = cv2.imread(meta['frame_path'])
+                if frame_img is None: continue
+                gray = cv2.cvtColor(frame_img, cv2.COLOR_BGR2GRAY)
+                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(20, 20))
+                meta['face_detection'] = {'num_faces': len(faces), 'face_bboxes_thumbnail': [list(f) for f in faces]}
+                if len(faces) > 0:
+                    logger.info(f"    Detected {len(faces)} face(s) in thumbnail from frame {meta.get('frame_number', 'N/A')}")
+            except Exception as e:
+                logger.error(f"    Error during face detection for {meta['frame_path']}: {e}")
+                meta['face_detection'] = {'error': str(e)}
 
+    # Rotation
     if settings.rotate_thumbnails != 0:
         logger.info(f"  Rotating thumbnails by {settings.rotate_thumbnails} degrees clockwise...")
-        rotation_flag = None
-        if settings.rotate_thumbnails == 90: rotation_flag = cv2.ROTATE_90_CLOCKWISE
-        elif settings.rotate_thumbnails == 180: rotation_flag = cv2.ROTATE_180
-        elif settings.rotate_thumbnails == 270: rotation_flag = cv2.ROTATE_90_COUNTERCLOCKWISE
-        
-        if rotation_flag is not None:
-            for i, item_meta in enumerate(source_frame_metadata_list):
+        rot_flag = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(settings.rotate_thumbnails)
+        if rot_flag is not None:
+            for meta in metadata_list:
                 try:
-                    thumb_img = cv2.imread(item_meta['frame_path'])
-                    if thumb_img is None: logger.warning(f"    Could not read image {item_meta['frame_path']} for rotation. Skipping."); continue
-                    rotated_img = cv2.rotate(thumb_img, rotation_flag)
-                    if not cv2.imwrite(item_meta['frame_path'], rotated_img): logger.warning(f"    Failed to save rotated image {item_meta['frame_path']}. Skipping rotation.")
-                except Exception as e: log_callback(f"    Error during rotation for {item_meta['frame_path']}: {e}. Skipping rotation."); item_meta['rotation_error'] = str(e)
-        else: logger.warning(f"  Invalid rotation angle {settings.rotate_thumbnails}. Skipping rotation.")
-
-    items_for_grid_input = []
-    if settings.layout_mode == "timeline": 
-        items_for_grid_input = [{'image_path': sm['frame_path'], 'width_ratio': float(sm['duration_frames'])}
-                                for sm in source_frame_metadata_list if sm.get('duration_frames', 0) > 0]
-        if not items_for_grid_input and source_frame_metadata_list:
-             logger.warning("  No shots with positive duration remain for timeline view.")
-    else: # grid mode
-         items_for_grid_input = [meta['frame_path'] for meta in source_frame_metadata_list]
-
-    if not items_for_grid_input: 
-        message = f"No frames/shots remaining after all processing for {video_file_path}."
-        if cleanup_temp_dir_for_this_video and os.path.exists(temp_frames_output_folder):
-            try: shutil.rmtree(temp_frames_output_folder); message += " Temp dir cleaned."
-            except Exception as e: message += f" Error cleaning temp dir: {e}"
-        return False, message
-    
-    logger.info(f"  Proceeding with {len(items_for_grid_input)} items for grid generation.")
-
-    if not os.path.exists(settings.output_dir):
-        try: os.makedirs(settings.output_dir)
-        except OSError as e: return False, f"Error creating output directory {settings.output_dir}: {e}"
-
-    final_movieprint_path = os.path.join(settings.output_dir, effective_output_filename)
-    counter = 1; base, ext = os.path.splitext(final_movieprint_path)
-    while os.path.exists(final_movieprint_path):
-        final_movieprint_path = f"{base}_{counter}{ext}"; counter+=1
-    if counter > 1: logger.warning(f"  Warning: Movieprint file existed. Saving as {final_movieprint_path}")
-    
-    logger.info(f"  Generating MoviePrint ({settings.layout_mode} layout) -> {final_movieprint_path}")
-    
-    grid_params = { 'image_source_data': items_for_grid_input, 'output_path': final_movieprint_path,
-        'padding': settings.padding, 'background_color_hex': settings.background_color,
-        'layout_mode': settings.layout_mode, 'logger': logger } # Pass logger to image_grid
-    if settings.layout_mode == "grid":
-        if getattr(settings, 'rows', None):
-            grid_params['rows'] = settings.rows
+                    thumb_img = cv2.imread(meta['frame_path'])
+                    if thumb_img is None: continue
+                    rotated = cv2.rotate(thumb_img, rot_flag)
+                    if not cv2.imwrite(meta['frame_path'], rotated):
+                        logger.warning(f"    Failed to save rotated image {meta['frame_path']}.")
+                except Exception as e:
+                    logger.error(f"    Error rotating {meta['frame_path']}: {e}")
+                    meta['rotation_error'] = str(e)
         else:
-            grid_params['columns'] = settings.columns
-        grid_params['target_thumbnail_width'] = getattr(settings, 'target_thumbnail_width', None)
+            logger.warning(f"  Invalid rotation angle {settings.rotate_thumbnails}. Skipping rotation.")
+
+    return metadata_list
+
+
+def _generate_movieprint(metadata_list, settings, output_path, logger):
+    """Generates the final movieprint image."""
+    items_for_grid = []
+    if settings.layout_mode == "timeline":
+        items_for_grid = [{'image_path': sm['frame_path'], 'width_ratio': float(sm['duration_frames'])}
+                          for sm in metadata_list if sm.get('duration_frames', 0) > 0]
+    else:  # grid mode
+        items_for_grid = [meta['frame_path'] for meta in metadata_list]
+
+    if not items_for_grid:
+        return False, None, "No frames/shots remaining for grid generation."
+
+    logger.info(f"  Proceeding with {len(items_for_grid)} items for grid generation.")
+
+    grid_params = {
+        'image_source_data': items_for_grid, 'output_path': output_path,
+        'padding': settings.padding, 'background_color_hex': settings.background_color,
+        'layout_mode': settings.layout_mode, 'logger': logger
+    }
+    if settings.layout_mode == "grid":
+        grid_params.update({'rows': getattr(settings, 'rows', None),
+                            'columns': settings.columns,
+                            'target_thumbnail_width': getattr(settings, 'target_thumbnail_width', None)})
     elif settings.layout_mode == "timeline":
-        grid_params['target_row_height'] = settings.target_row_height
-        grid_params['max_grid_width'] = settings.output_image_width
+        grid_params.update({'target_row_height': settings.target_row_height,
+                            'max_grid_width': settings.output_image_width})
 
-    grid_success, thumbnail_layout_data = image_grid.create_image_grid(**grid_params)
+    success, layout_data = image_grid.create_image_grid(**grid_params)
+    if not success:
+        return False, None, "MoviePrint image generation failed."
 
-    if not grid_success:
-        if cleanup_temp_dir_for_this_video and os.path.exists(temp_frames_output_folder):
-            try: shutil.rmtree(temp_frames_output_folder)
-            except Exception as e: log_callback(f"  Error cleaning temp dir after failed grid: {e}")
-        return False, f"MoviePrint image generation failed for {video_file_path}."
-    
-    logger.info(f"  MoviePrint successfully saved to {final_movieprint_path}")
-
-    enforce_max_filesize(final_movieprint_path, settings.max_output_filesize_kb, logger)
-
-    if settings.save_metadata_json:
-        logger.info(f"  Generating metadata JSON...")
-        source_metadata_map = {meta['frame_path']: meta for meta in source_frame_metadata_list} # Use the potentially reduced list
-        combined_thumbnails_metadata = []
-        for layout_item in thumbnail_layout_data: 
-            source_meta = source_metadata_map.get(layout_item['image_path'])
-            if source_meta: 
-                final_thumb_meta = {
-                    'original_video_filename': source_meta.get('video_filename'),
-                    'source_frame_number': source_meta.get('frame_number'),
-                    'source_timestamp_sec': source_meta.get('timestamp_sec'),
-                    'source_timecode': source_meta.get('timecode'),
-                    'shot_start_frame': source_meta.get('start_frame'),
-                    'shot_end_frame': source_meta.get('end_frame'),
-                    'shot_duration_frames': source_meta.get('duration_frames'),
-                    'layout_in_movieprint': { 'x': layout_item['x'], 'y': layout_item['y'],
-                        'width': layout_item['width'], 'height': layout_item['height'] },
-                    'face_detection': source_meta.get('face_detection'),
-                    'rotation_error': source_meta.get('rotation_error') 
-                }
-                final_thumb_meta_cleaned = {k: v for k, v in final_thumb_meta.items() if v is not None}
-                combined_thumbnails_metadata.append(final_thumb_meta_cleaned)
-        
-        settings_dict_copy = vars(settings).copy() 
-        settings_dict_copy['parsed_start_time_sec'] = start_time_sec
-        settings_dict_copy['parsed_end_time_sec'] = end_time_sec
-        if excluded_items_info_for_log : settings_dict_copy['processing_warnings_log'] = excluded_items_info_for_log
-        settings_dict_copy['actual_frames_in_print'] = len(items_for_grid_input)
+    logger.info(f"  MoviePrint successfully saved to {output_path}")
+    return True, layout_data, None
 
 
-        full_metadata = {
-            'movieprint_image_filename': os.path.basename(final_movieprint_path),
-            'source_video_processed': video_file_path,
-            'generation_parameters': settings_dict_copy,
-            'thumbnails': combined_thumbnails_metadata
-        }
-        json_output_path = os.path.splitext(final_movieprint_path)[0] + ".json"
-        try:
-            with open(json_output_path, 'w') as f: json.dump(full_metadata, f, indent=4)
-            logger.info(f"  Metadata JSON saved to {json_output_path}")
-        except Exception as e: log_callback(f"  Error saving metadata JSON to {json_output_path}: {e}")
+def _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, process_warnings, movieprint_path, logger):
+    """Saves the metadata JSON file."""
+    if not settings.save_metadata_json:
+        return
 
-    if cleanup_temp_dir_for_this_video: # This will now leave selected frames if max_frames_for_print was used and some were removed
-        try:
-            # If we did frame limiting and cleanup_temp_dir, the unselected ones are already gone.
-            # If no frame limiting, or if user specified temp_dir, this rmtree is fine.
-            # If frame limiting AND user specified temp_dir, we should NOT rmtree here.
-            # The current logic for cleanup_temp_dir_for_this_video is if *we* created it.
-            # The internal selective removal handles the case where we created it AND limited frames.
-            # So, this rmtree should now only remove the temp dir if it's truly temporary and contains only the selected frames.
-            shutil.rmtree(temp_frames_output_folder)
-            logger.info(f"  Successfully cleaned up temporary frames directory: {temp_frames_output_folder}")
-        except Exception as e: log_callback(f"  Error during cleanup of temporary directory {temp_frames_output_folder}: {e}")
-    return True, final_movieprint_path
+    logger.info("  Generating metadata JSON...")
+    source_map = {meta['frame_path']: meta for meta in metadata_list}
+    combined_thumb_meta = []
+    for layout_item in layout_data:
+        source_meta = source_map.get(layout_item['image_path'])
+        if source_meta:
+            final_meta = {k: source_meta.get(k) for k in [
+                'video_filename', 'frame_number', 'timestamp_sec', 'timecode',
+                'start_frame', 'end_frame', 'duration_frames',
+                'face_detection', 'rotation_error'
+            ] if source_meta.get(k) is not None}
+            final_meta['layout_in_movieprint'] = {k: layout_item[k] for k in ['x', 'y', 'width', 'height']}
+            combined_thumb_meta.append(final_meta)
+
+    settings_copy = vars(settings).copy()
+    settings_copy.update({'parsed_start_time_sec': start_sec, 'parsed_end_time_sec': end_sec,
+                          'processing_warnings_log': process_warnings,
+                          'actual_frames_in_print': len(combined_thumb_meta)})
+
+    full_meta = {
+        'movieprint_image_filename': os.path.basename(movieprint_path),
+        'source_video_processed': os.path.abspath(settings.input_paths[0]),
+        'generation_parameters': settings_copy,
+        'thumbnails': combined_thumb_meta
+    }
+    json_path = os.path.splitext(movieprint_path)[0] + ".json"
+    try:
+        with open(json_path, 'w') as f:
+            json.dump(full_meta, f, indent=4)
+        logger.info(f"  Metadata JSON saved to {json_path}")
+    except Exception as e:
+        logger.error(f"  Error saving metadata JSON to {json_path}: {e}")
+
+
+def process_single_video(video_file_path, settings, effective_output_filename, logger):
+    logger.info(f"\nProcessing video: {video_file_path}...")
+
+    start_sec = parse_time_to_seconds(settings.start_time)
+    end_sec = parse_time_to_seconds(settings.end_time)
+
+    # Validate times
+    if (settings.start_time and start_sec is None) or (settings.end_time and end_sec is None) or \
+       (start_sec is not None and end_sec is not None and start_sec >= end_sec):
+        return False, "Invalid time format or start_time is not less than end_time."
+
+    temp_dir, cleanup_temp, error = _setup_temp_directory(video_file_path, settings, logger)
+    if error:
+        return False, error
+
+    try:
+        extraction_ok, metadata_list = _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, logger)
+        if not extraction_ok:
+            return False, f"Frame extraction failed for {video_file_path}."
+
+        metadata_list, process_warnings = _apply_exclusions(metadata_list, settings, logger)
+        metadata_list = _limit_frames_for_grid(metadata_list, settings, temp_dir, cleanup_temp, logger)
+        metadata_list = _process_thumbnails(metadata_list, settings, logger)
+
+        if not os.path.exists(settings.output_dir):
+            os.makedirs(settings.output_dir)
+
+        final_path = os.path.join(settings.output_dir, effective_output_filename)
+        counter = 1
+        base, ext = os.path.splitext(final_path)
+        while os.path.exists(final_path):
+            final_path = f"{base}_{counter}{ext}"
+            counter += 1
+        if counter > 1:
+            logger.warning(f"  Warning: Movieprint file existed. Saving as {final_path}")
+
+        success, layout_data, error_msg = _generate_movieprint(metadata_list, settings, final_path, logger)
+        if not success:
+            return False, error_msg
+
+        enforce_max_filesize(final_path, settings.max_output_filesize_kb, logger)
+        _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, process_warnings, final_path, logger)
+
+        return True, final_path
+
+    finally:
+        if cleanup_temp and os.path.exists(temp_dir):
+            try:
+                shutil.rmtree(temp_dir)
+                logger.info(f"  Successfully cleaned up temporary directory: {temp_dir}")
+            except Exception as e:
+                logger.error(f"  Error cleaning up temp directory {temp_dir}: {e}")
 
 def execute_movieprint_generation(settings, logger, progress_callback=None):
     logger.info("Starting MoviePrint generation process...")
@@ -395,15 +408,15 @@ def execute_movieprint_generation(settings, logger, progress_callback=None):
 
     successful_ops = []
     failed_ops = []
-    
+
     is_single_file_direct_input = len(settings.input_paths) == 1 and os.path.isfile(settings.input_paths[0])
-    
-    output_print_format = "png" 
+
+    output_print_format = "png"
     if is_single_file_direct_input and settings.output_filename:
         _, ext = os.path.splitext(settings.output_filename)
-        if ext.lower() in ['.png', '.jpg', '.jpeg']: 
+        if ext.lower() in ['.png', '.jpg', '.jpeg']:
             output_print_format = ext.lower().replace('.', '').replace('jpeg','jpg')
-        elif settings.frame_format.lower() in ['jpg', 'png']: 
+        elif settings.frame_format.lower() in ['jpg', 'png']:
             output_print_format = settings.frame_format.lower()
 
     total_videos = len(video_files_to_process)
@@ -417,18 +430,18 @@ def execute_movieprint_generation(settings, logger, progress_callback=None):
         else:
             base = os.path.splitext(os.path.basename(video_path))[0]
             effective_output_name = f"{base}{settings.output_filename_suffix}.{output_print_format}"
-        
+
         try:
             success, message_or_path = process_single_video(video_path, settings, effective_output_name, logger)
-            if success: 
+            if success:
                 successful_ops.append({'video': video_path, 'output': message_or_path})
-            else: 
+            else:
                 failed_ops.append({'video': video_path, 'reason': message_or_path})
         except Exception as e:
             logger.exception(f"CRITICAL UNHANDLED ERROR processing {video_path}: {e}")
             failed_ops.append({'video': video_path, 'reason': f"Unexpected critical error: {str(e)}"})
-    
-    if progress_callback: 
+
+    if progress_callback:
         progress_callback(total_videos, total_videos, "Batch completed")
 
     return successful_ops, failed_ops
@@ -440,7 +453,7 @@ def main():
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
-    
+
     logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
     logger = logging.getLogger(__name__)
     logger.info("Logging initialized.")
@@ -499,7 +512,7 @@ def main():
                               help="Attempt to limit final MoviePrint file size to this value in kilobytes.")
 
     args = parser.parse_args()
-    
+
     def cli_progress_callback(current, total, filename=""):
         if total > 0 :
              percent = (current / total) * 100
@@ -512,7 +525,7 @@ def main():
         if args.exclude_shots: parser.error("--exclude_shots only with --extraction_mode 'shot'.")
     elif args.extraction_mode == "shot":
         if args.exclude_frames: parser.error("--exclude_frames only with --extraction_mode 'interval'.")
-    if args.layout_mode == "timeline" and args.extraction_mode != "shot": 
+    if args.layout_mode == "timeline" and args.extraction_mode != "shot":
         parser.error("--layout_mode 'timeline' requires --extraction_mode 'shot'.")
 
     # Validations for target_thumbnail_width
@@ -536,7 +549,7 @@ def main():
         args.max_frames_for_print = None # Ensure it's not used for timeline
 
     successful_ops, failed_ops = execute_movieprint_generation(
-        settings=args, 
+        settings=args,
         logger=logger,
         progress_callback=cli_progress_callback
     )
@@ -546,12 +559,12 @@ def main():
         logger.info(f"\nSuccessfully processed {len(successful_ops)} video(s):")
         for item in successful_ops: logger.info(f"  - Input: {item['video']}\n    Output: {item['output']}")
     else: logger.info("No videos processed successfully.")
-    
+
     if failed_ops:
         logger.info(f"\nFailed to process {len(failed_ops)} video(s):")
         for item in failed_ops: logger.info(f"  - Input: {item['video']}\n    Reason: {item['reason']}")
     elif successful_ops: logger.info("\nAll identified videos processed without reported failures.")
-    
+
     logger.info("\nCLI movieprint creation process finished.")
 
 if __name__ == "__main__":
