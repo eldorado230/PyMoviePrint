@@ -62,10 +62,37 @@ class Tooltip:
             self.tooltip_window.destroy()
         self.tooltip_window = None
 
+class ScrubbingHandler:
+    def __init__(self, app):
+        self.app = app
+        self.active = False
+        self.thumbnail_index = -1
+        self.start_x = 0
+        self.last_x = 0
+        self.original_timestamp = 0
+
+    def start(self, event, thumbnail_index, original_timestamp):
+        self.active = True
+        self.thumbnail_index = thumbnail_index
+        self.original_timestamp = original_timestamp
+        self.start_x = event.x
+        self.last_x = event.x
+        # Change cursor to indicate scrubbing is active
+        self.app.preview_zoomable_canvas.canvas.config(cursor="sb_h_double_arrow")
+
+    def stop(self, event):
+        # Potentially finalize the scrub, e.g., save the new thumbnail choice
+        self.app.queue.put(("log", f"Scrubbing finished for thumbnail {self.thumbnail_index}."))
+        self.active = False
+        self.thumbnail_index = -1
+        # Restore cursor
+        self.app.preview_zoomable_canvas.canvas.config(cursor="")
+
 
 class ZoomableCanvas(ttk.Frame):
-    def __init__(self, master, **kwargs):
+    def __init__(self, master, app_ref, **kwargs):
         super().__init__(master, **kwargs)
+        self.app_ref = app_ref # Reference to the main MoviePrintApp instance
         self.canvas = tk.Canvas(self, background="#ECECEC")
         self.canvas.grid(row=0, column=0, sticky="nsew")
 
@@ -86,17 +113,39 @@ class ZoomableCanvas(ttk.Frame):
         # Bind events
         self.canvas.bind("<ButtonPress-1>", self.on_button_press)
         self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
+        self.canvas.bind("<ButtonRelease-1>", self.on_button_release)
         self.canvas.bind("<MouseWheel>", self.on_mouse_wheel) # Windows/macOS
         self.canvas.bind("<Button-4>", self.on_mouse_wheel)  # Linux scroll up
         self.canvas.bind("<Button-5>", self.on_mouse_wheel)  # Linux scroll down
 
     def on_button_press(self, event):
-        self.canvas.scan_mark(event.x, event.y)
+        if self.app_ref.is_scrubbing_active():
+            # This case should ideally not happen if logic is correct, but as a safeguard:
+            self.app_ref.stop_scrubbing(event)
+            return
+
+        is_scrub_initiated = self.app_ref.start_scrubbing(event)
+        if not is_scrub_initiated:
+            # If not starting a scrub, do the default pan action
+            self.canvas.scan_mark(event.x, event.y)
 
     def on_mouse_drag(self, event):
-        self.canvas.scan_dragto(event.x, event.y, gain=1)
+        if self.app_ref.is_scrubbing_active():
+            self.app_ref.handle_scrubbing(event)
+        else:
+            # If not scrubbing, do the default pan action
+            self.canvas.scan_dragto(event.x, event.y, gain=1)
+
+    def on_button_release(self, event):
+        if self.app_ref.is_scrubbing_active():
+            self.app_ref.stop_scrubbing(event)
+
 
     def on_mouse_wheel(self, event):
+        # Don't zoom while scrubbing
+        if self.app_ref.is_scrubbing_active():
+            return
+
         scale_factor = 1.1
         if (event.num == 5 or event.delta < 0): # Scroll down/zoom out
             self.canvas.scale("all", event.x, event.y, 1/scale_factor, 1/scale_factor)
@@ -291,15 +340,18 @@ class MoviePrintApp:
         self.root = TkinterDnD.Tk()
         self.root.title(f"MoviePrint Generator v{__version__}")
         self.root.geometry("1500x900") # Start with a larger window
+        self.scrubbing_handler = ScrubbingHandler(self)
 
         self._apply_theme()
 
         self._internal_input_paths = [] # Initialize for drag-and-drop and settings load
         self.thumbnail_images = [] # To store PhotoImage objects for preview
         self.thumbnail_paths = []
+        self.thumbnail_layout_data = [] # To store layout metadata for scrubbing
         self.queue = queue.Queue()
         self.preview_window = None # This will be the main canvas now
         self.preview_zoomable_canvas = None
+        self.preview_temp_dir = None
 
         # --- Define Default Settings Store ---
         self.default_settings = {
@@ -445,7 +497,7 @@ class MoviePrintApp:
         preview_frame.columnconfigure(0, weight=1)
         main_paned_window.add(preview_frame, weight=3) # Adjust weight for initial size
 
-        self.preview_zoomable_canvas = ZoomableCanvas(preview_frame)
+        self.preview_zoomable_canvas = ZoomableCanvas(preview_frame, app_ref=self)
         self.preview_zoomable_canvas.grid(row=0, column=0, sticky="nsew")
 
         self._populate_settings_sidebar(self.settings_frame)
@@ -527,6 +579,9 @@ class MoviePrintApp:
 
     def _on_closing(self):
         self._save_persistent_settings()
+        if self.preview_temp_dir and os.path.exists(self.preview_temp_dir):
+            import shutil
+            shutil.rmtree(self.preview_temp_dir, ignore_errors=True)
         self.root.destroy()
 
     def _handle_max_frames_change(self, *args):
@@ -564,7 +619,14 @@ class MoviePrintApp:
 
     def start_thumbnail_preview_generation(self):
         """Generate thumbnail previews based on current settings."""
+        import tempfile, shutil
         self.queue.put(("log", "Thumbnail preview generation initiated."))
+
+        # Clean up old temp dir if it exists
+        if self.preview_temp_dir and os.path.exists(self.preview_temp_dir):
+            shutil.rmtree(self.preview_temp_dir, ignore_errors=True)
+        self.preview_temp_dir = tempfile.mkdtemp(prefix="movieprint_preview_")
+
 
         # Clear previous preview thumbnails
         if self.preview_zoomable_canvas:
@@ -622,8 +684,6 @@ class MoviePrintApp:
             self.queue.put(("log", "Failed to save thumbnails."))
 
     def _thumbnail_preview_thread(self, video_path):
-        import tempfile
-        import shutil
         from movieprint_maker import parse_time_to_seconds
         import image_grid
 
@@ -635,9 +695,8 @@ class MoviePrintApp:
         queue_handler.setFormatter(formatter)
         thread_logger.addHandler(queue_handler)
         thread_logger.propagate = False
+        temp_dir = self.preview_temp_dir
 
-        temp_dir = tempfile.mkdtemp(prefix="movieprint_preview_")
-        cleanup = True
         try:
             start_sec = parse_time_to_seconds(self.start_time_var.get()) if self.start_time_var.get() else None
             end_sec = parse_time_to_seconds(self.end_time_var.get()) if self.end_time_var.get() else None
@@ -681,8 +740,8 @@ class MoviePrintApp:
                                 meta_list = [meta_list[i] for i in indices]
                 except (ValueError, ZeroDivisionError) as e:
                     thread_logger.warning(f"Could not apply max_frames for preview: {e}")
-
                 self.thumbnail_paths = [m['frame_path'] for m in meta_list]
+                self.thumbnail_metadata = meta_list
                 layout_mode = self.layout_mode_var.get()
                 grid_path = os.path.join(temp_dir, "preview_grid.jpg")
                 padding = int(self.padding_var.get()) if self.padding_var.get() else 0
@@ -710,8 +769,8 @@ class MoviePrintApp:
                     grid_params['target_thumbnail_width'] = int(ttw) if ttw else None
                     grid_params['image_source_data'] = [m['frame_path'] for m in meta_list]
 
-                grid_success, _ = image_grid.create_image_grid(**grid_params)
-
+                grid_success, layout_data = image_grid.create_image_grid(**grid_params)
+                self.thumbnail_layout_data = layout_data
                 if grid_success:
                     # --- NEW: Resize based on quality slider ---
                     quality_percent = self.preview_quality_var.get()
@@ -1334,6 +1393,8 @@ class MoviePrintApp:
                     elif data == "disable_button": self.generate_button.config(state="disabled")
                 elif message_type == "preview_grid":
                     self._display_thumbnail_preview(data)
+                elif message_type == "update_thumbnail":
+                    self.update_thumbnail_in_preview(data['index'], data['image_path'])
                 self.root.update_idletasks()
         except queue.Empty: pass
         self.root.after(100, self.check_queue)
@@ -1506,6 +1567,101 @@ class MoviePrintApp:
             if progress_cb:
                 max_progress = self.progress_bar.cget("maximum") if hasattr(self, 'progress_bar') else 100
                 progress_cb(max_progress, max_progress, "Done")
+
+    def is_scrubbing_active(self):
+        return self.scrubbing_handler.active
+
+    def start_scrubbing(self, event):
+        if not self.thumbnail_layout_data or not self.preview_zoomable_canvas.image:
+            return False
+
+        canvas = self.preview_zoomable_canvas.canvas
+        canvas_x = canvas.canvasx(event.x)
+        canvas_y = canvas.canvasy(event.y)
+
+        for i, thumb_info in enumerate(self.thumbnail_layout_data):
+            x1, y1 = thumb_info['x'], thumb_info['y']
+            x2, y2 = x1 + thumb_info['width'], y1 + thumb_info['height']
+            if x1 <= canvas_x <= x2 and y1 <= canvas_y <= y2:
+                self.queue.put(("log", f"Scrubbing initiated for thumbnail {i}."))
+                original_meta = self.thumbnail_metadata[i]
+                original_timestamp = original_meta.get('timestamp_sec', 0.0)
+                self.scrubbing_handler.start(event, i, original_timestamp)
+                return True
+        return False
+
+    def handle_scrubbing(self, event):
+        if not self.scrubbing_handler.active:
+            return
+
+        dx = event.x - self.scrubbing_handler.start_x
+        pixels_per_second = 50.0
+        time_offset = dx / pixels_per_second
+
+        new_timestamp = self.scrubbing_handler.original_timestamp + time_offset
+
+        video_path = self._internal_input_paths[0]
+        duration = self._get_video_duration_sync(video_path)
+        if duration is not None:
+            new_timestamp = max(0, min(new_timestamp, duration))
+
+        import tempfile
+        temp_dir = tempfile.mkdtemp(prefix="movieprint_scrub_")
+        frame_filename = f"scrub_thumb_{self.scrubbing_handler.thumbnail_index}.jpg"
+        output_path = os.path.join(temp_dir, frame_filename)
+
+        thread = threading.Thread(target=self._scrub_frame_extraction_thread,
+                                  args=(video_path, new_timestamp, output_path, self.scrubbing_handler.thumbnail_index, temp_dir))
+        thread.daemon = True
+        thread.start()
+
+    def _scrub_frame_extraction_thread(self, video_path, timestamp, output_path, thumb_index, temp_dir_to_clean):
+        thread_logger = logging.getLogger(f"scrub_thread_{threading.get_ident()}")
+        thread_logger.setLevel(logging.INFO)
+        queue_handler = QueueHandler(self.queue)
+        thread_logger.addHandler(queue_handler)
+        thread_logger.propagate = False
+
+        success = video_processing.extract_specific_frame(video_path, timestamp, output_path, thread_logger)
+
+        if success:
+            try:
+                with Image.open(output_path) as img:
+                    # Instead of path, send image data directly.
+                    self.queue.put(("update_thumbnail", {"index": thumb_index, "image": img.copy()}))
+
+                if thumb_index < len(self.thumbnail_metadata):
+                    self.thumbnail_metadata[thumb_index]['timestamp_sec'] = timestamp
+                    # Keep track of the file path in case we need to save it later
+                    self.thumbnail_metadata[thumb_index]['frame_path'] = output_path
+                    self.thumbnail_paths[thumb_index] = output_path
+            except Exception as e:
+                thread_logger.error(f"Error processing scrubbed image {output_path}: {e}")
+
+        import shutil
+        shutil.rmtree(temp_dir_to_clean, ignore_errors=True)
+
+    def stop_scrubbing(self, event):
+        if self.scrubbing_handler.active:
+            self.scrubbing_handler.stop(event)
+
+    def update_thumbnail_in_preview(self, index, new_thumb_img):
+        if not self.preview_zoomable_canvas.image or index >= len(self.thumbnail_layout_data):
+            self.queue.put(("log", f"Error: Cannot update thumbnail. Preview image or layout data missing."))
+            return
+
+        try:
+            thumb_info = self.thumbnail_layout_data[index]
+            resized_thumb = new_thumb_img.resize((thumb_info['width'], thumb_info['height']), Image.Resampling.LANCZOS)
+
+            self.preview_zoomable_canvas.image.paste(resized_thumb, (thumb_info['x'], thumb_info['y']))
+
+            self.preview_zoomable_canvas.photo_image = ImageTk.PhotoImage(self.preview_zoomable_canvas.image)
+            self.preview_zoomable_canvas.canvas.itemconfig(self.preview_zoomable_canvas.image_id, image=self.preview_zoomable_canvas.photo_image)
+            new_thumb_img.close()
+            resized_thumb.close()
+        except Exception as e:
+            self.queue.put(("log", f"Error updating thumbnail in preview: {e}"))
 
     def update_options_visibility(self, event=None): 
         # ... (content as before, ensure row numbers are correct) ...
