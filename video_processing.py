@@ -180,19 +180,19 @@ def extract_shot_boundary_frames(video_path, output_folder, logger, output_forma
             effective_end_time = FrameTimecode(timecode=end_time_sec, fps=video_fps)
             logger.info(f"  Shot detection until {end_time_sec:.2f}s ({effective_end_time.get_timecode()}).")
 
-        # PySceneDetect's detect_scenes does not take start_time and end_time directly.
         scene_manager = SceneManager()
         scene_manager.add_detector(ContentDetector(threshold=detector_threshold))
 
-        if effective_start_time or effective_end_time:
-            video_manager.set_duration(start=effective_start_time, end=effective_end_time)
+        if effective_start_time:
+            video_manager.seek(effective_start_time)
 
         logger.info(f"Starting shot detection for '{video_path}' (Threshold: {detector_threshold})...")
         scene_manager.detect_scenes(
             video=video_manager,
+            end_time=effective_end_time,
             show_progress=True
         )
-        scene_list = scene_manager.get_scene_list()
+        scene_list = scene_manager.get_scene_list(start_in_scene=True)
 
         if not scene_list:
             logger.info("No shots detected in the specified segment."); return True, shot_meta_list

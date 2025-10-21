@@ -40,5 +40,11 @@ class TestVideoProcessing(unittest.TestCase):
         self.assertTrue(success)
         self.assertGreater(len(frames), 0)
 
+    def test_extract_shot_boundary_frames_with_time_segment(self):
+        # This test should fail before the fix and pass after
+        success, frames = extract_shot_boundary_frames(self.video_path, self.output_dir, self.logger, start_time_sec=1, end_time_sec=2, detector_threshold=15.0)
+        self.assertTrue(success)
+        self.assertEqual(len(frames), 1)
+
 if __name__ == '__main__':
     unittest.main()
