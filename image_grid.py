@@ -155,6 +155,15 @@ def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, pa
 
     current_x = grid_margin
     current_y = grid_margin + header_height
+
+    # Load font once
+    font = None
+    if frame_info_show:
+        try:
+            font = ImageFont.truetype("arial.ttf", frame_info_size)
+        except IOError:
+            font = ImageFont.load_default()
+
     for i, img_obj in enumerate(image_objects):
         img_copy = img_obj.copy()
         # Resize an image to fit within the cell_w x cell_h box, preserving aspect ratio
@@ -167,46 +176,52 @@ def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, pa
 
         paste_x = current_x + x_offset
         paste_y = current_y + y_offset
-        if frame_info_show:
-            draw = ImageDraw.Draw(img_copy)
-            try:
-                font = ImageFont.truetype("arial.ttf", frame_info_size)
-            except IOError:
-                font = ImageFont.load_default()
+
+        # Apply rounded corners first if needed
+        if rounded_corners > 0:
+            mask = Image.new('L', (final_w, final_h), 0)
+            draw_mask = ImageDraw.Draw(mask)
+            draw_mask.rounded_rectangle((0, 0, final_w, final_h), radius=rounded_corners, fill=255)
+
+            # Create a new image with RGBA to hold the masked image
+            img_rgba = img_copy.convert("RGBA")
+            img_rgba.putalpha(mask)
+
+            # Paste onto the grid (mask is handled by alpha channel now)
+            grid_image.paste(img_rgba, (paste_x, paste_y), img_rgba)
+        else:
+            grid_image.paste(img_copy, (paste_x, paste_y))
+
+        # Draw text info on top of the grid image (after pasting the thumbnail)
+        if frame_info_show and font:
+            draw_grid = ImageDraw.Draw(grid_image)
 
             if frame_info_timecode_or_frame == "timecode":
                 text = f"TC: {i}"
             else:
                 text = f"F: {i}"
 
-            text_bbox = draw.textbbox((0, 0), text, font=font)
+            text_bbox = draw_grid.textbbox((0, 0), text, font=font)
             text_width = text_bbox[2] - text_bbox[0]
             text_height = text_bbox[3] - text_bbox[1]
 
+            # Calculate text position relative to the thumbnail (paste_x, paste_y)
             if frame_info_position == "bottom_left":
-                text_x = frame_info_margin
-                text_y = final_h - text_height - frame_info_margin
+                text_x = paste_x + frame_info_margin
+                text_y = paste_y + final_h - text_height - frame_info_margin
             elif frame_info_position == "bottom_right":
-                text_x = final_w - text_width - frame_info_margin
-                text_y = final_h - text_height - frame_info_margin
+                text_x = paste_x + final_w - text_width - frame_info_margin
+                text_y = paste_y + final_h - text_height - frame_info_margin
             elif frame_info_position == "top_left":
-                text_x = frame_info_margin
-                text_y = frame_info_margin
+                text_x = paste_x + frame_info_margin
+                text_y = paste_y + frame_info_margin
             else: # top_right
-                text_x = final_w - text_width - frame_info_margin
-                text_y = frame_info_margin
+                text_x = paste_x + final_w - text_width - frame_info_margin
+                text_y = paste_y + frame_info_margin
 
             bg_rect = (text_x - 2, text_y - 2, text_x + text_width + 2, text_y + text_height + 2)
-            draw.rectangle(bg_rect, fill=frame_info_bg_color)
-            draw.text((text_x, text_y), text, font=font, fill=frame_info_font_color)
-
-        if rounded_corners > 0:
-            mask = Image.new('L', (final_w, final_h), 0)
-            draw = ImageDraw.Draw(mask)
-            draw.rounded_rectangle((0, 0, final_w, final_h), radius=rounded_corners, fill=255)
-            grid_image.paste(img_copy, (paste_x, paste_y), mask)
-        else:
-            grid_image.paste(img_copy, (paste_x, paste_y))
+            draw_grid.rectangle(bg_rect, fill=frame_info_bg_color)
+            draw_grid.text((text_x, text_y), text, font=font, fill=frame_info_font_color)
 
         thumbnail_layout_data.append({
             'image_path': original_paths[i],
