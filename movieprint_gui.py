@@ -5,6 +5,8 @@ import os
 import argparse
 import threading
 import queue
+import shutil
+import uuid
 import cv2
 import json # << NEW IMPORT for saving/loading settings
 import video_processing
@@ -70,6 +72,7 @@ class ScrubbingHandler:
         self.start_x = 0
         self.last_x = 0
         self.original_timestamp = 0
+        self.temp_dir = None
 
     def start(self, event, thumbnail_index, original_timestamp):
         self.active = True
@@ -77,6 +80,8 @@ class ScrubbingHandler:
         self.original_timestamp = original_timestamp
         self.start_x = event.x
         self.last_x = event.x
+        import tempfile
+        self.temp_dir = tempfile.mkdtemp(prefix="movieprint_scrub_")
         # Change cursor to indicate scrubbing is active
         self.app.preview_zoomable_canvas.canvas.config(cursor="sb_h_double_arrow")
 
@@ -87,6 +92,12 @@ class ScrubbingHandler:
         self.thumbnail_index = -1
         # Restore cursor
         self.app.preview_zoomable_canvas.canvas.config(cursor="")
+        if self.temp_dir and os.path.exists(self.temp_dir):
+            try:
+                shutil.rmtree(self.temp_dir, ignore_errors=True)
+            except Exception as e:
+                print(f"Error cleaning up scrubbing temp dir: {e}")
+            self.temp_dir = None
 
 
 class ZoomableCanvas(ttk.Frame):
@@ -1392,8 +1403,8 @@ class MoviePrintApp:
             if len(self._internal_input_paths) == 1:
                 # Already checked it's a file by being in video_files
                 self.queue.put(("log", f"Drag & drop: Single file '{os.path.basename(self._internal_input_paths[0])}' selected."))
-                # Delay slightly to allow GUI to update input field text before potential modal dialogs from auto-calc
-                self.root.after(100, lambda p=self._internal_input_paths[0]: self._auto_calculate_and_set_interval(p))
+                # Run auto-calculation in a thread to avoid blocking UI
+                threading.Thread(target=self._auto_calculate_and_set_interval, args=(self._internal_input_paths[0],), daemon=True).start()
                 self.start_thumbnail_preview_generation()
             else:
                 self.interval_seconds_var.set("5.0") # Reset interval for multiple files
@@ -1641,17 +1652,25 @@ class MoviePrintApp:
         if duration is not None:
             new_timestamp = max(0, min(new_timestamp, duration))
 
-        import tempfile
-        temp_dir = tempfile.mkdtemp(prefix="movieprint_scrub_")
-        frame_filename = f"scrub_thumb_{self.scrubbing_handler.thumbnail_index}.jpg"
+        # Use the shared temp dir from the handler
+        temp_dir = self.scrubbing_handler.temp_dir
+        if not temp_dir or not os.path.exists(temp_dir):
+            # Fallback if something went wrong
+            import tempfile
+            temp_dir = tempfile.mkdtemp(prefix="movieprint_scrub_fallback_")
+
+        # Use unique filename to prevent race conditions between rapid threads
+        unique_id = uuid.uuid4().hex
+        frame_filename = f"scrub_thumb_{self.scrubbing_handler.thumbnail_index}_{unique_id}.jpg"
         output_path = os.path.join(temp_dir, frame_filename)
 
+        # We don't pass a temp_dir_to_clean anymore because cleanup is handled in ScrubbingHandler.stop()
         thread = threading.Thread(target=self._scrub_frame_extraction_thread,
-                                  args=(video_path, new_timestamp, output_path, self.scrubbing_handler.thumbnail_index, temp_dir))
+                                  args=(video_path, new_timestamp, output_path, self.scrubbing_handler.thumbnail_index))
         thread.daemon = True
         thread.start()
 
-    def _scrub_frame_extraction_thread(self, video_path, timestamp, output_path, thumb_index, temp_dir_to_clean):
+    def _scrub_frame_extraction_thread(self, video_path, timestamp, output_path, thumb_index):
         thread_logger = logging.getLogger(f"scrub_thread_{threading.get_ident()}")
         thread_logger.setLevel(logging.INFO)
         queue_handler = QueueHandler(self.queue)
@@ -1673,9 +1692,6 @@ class MoviePrintApp:
                     self.thumbnail_paths[thumb_index] = output_path
             except Exception as e:
                 thread_logger.error(f"Error processing scrubbed image {output_path}: {e}")
-
-        import shutil
-        shutil.rmtree(temp_dir_to_clean, ignore_errors=True)
 
     def stop_scrubbing(self, event):
         if self.scrubbing_handler.active:

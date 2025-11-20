@@ -444,8 +444,21 @@ def execute_movieprint_generation(settings, logger, progress_callback=None):
             base = os.path.splitext(os.path.basename(video_path))[0]
             effective_output_name = f"{base}{settings.output_filename_suffix}.{output_print_format}"
 
+        # Original Folder Name Logic
+        # If we are processing multiple files or recursively scanning, we might want to keep structure.
+        # The user requirement is: "create a subfolder in the output directory that matches the name of the folder containing the video."
+
+        parent_folder_name = os.path.basename(os.path.dirname(os.path.abspath(video_path)))
+
+        # Clone settings so we don't affect other iterations
+        import copy
+        current_settings = copy.copy(settings)
+
+        # Modify output directory to include the parent folder name
+        current_settings.output_dir = os.path.join(settings.output_dir, parent_folder_name)
+
         try:
-            success, message_or_path = process_single_video(video_path, settings, effective_output_name, logger)
+            success, message_or_path = process_single_video(video_path, current_settings, effective_output_name, logger)
             if success:
                 successful_ops.append({'video': video_path, 'output': message_or_path})
             else:
