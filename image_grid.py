@@ -158,7 +158,7 @@ def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, pa
     for i, img_obj in enumerate(image_objects):
         img_copy = img_obj.copy()
         # Resize an image to fit within the cell_w x cell_h box, preserving aspect ratio
-        img_copy.thumbnail((cell_w, cell_h), Image.Resampling.LANCZOS)
+        img_copy.thumbnail((cell_w, cell_h), Image.Resampling.BICUBIC)
 
         final_w, final_h = img_copy.width, img_copy.height
         # Calculate offsets to center the thumbnail in the cell
@@ -258,7 +258,7 @@ def _create_timeline_view_grid(image_objects_with_paths_ratios, output_path,
         new_height = target_row_height
         new_width = int(new_height * aspect_ratio)
         try:
-            scaled_img = img_obj.resize((new_width, new_height), Image.Resampling.LANCZOS)
+            scaled_img = img_obj.resize((new_width, new_height), Image.Resampling.BICUBIC)
             scaled_images_info.append({
                 'image': scaled_img, 'original_path': original_paths[i],
                 'original_width_at_row_h': new_width, 'ratio': width_ratios[i]

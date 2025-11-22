@@ -1138,7 +1138,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             if not duration: duration = 600 # Fallback
 
             # Target pool size ~400
-            interval = duration / 400.0
+            interval = duration / 200.0
             if interval < 0.1: interval = 0.1
 
             success, meta = video_processing.extract_frames(video_path, temp_dir, thread_logger, interval_seconds=interval, fast_preview=True)
