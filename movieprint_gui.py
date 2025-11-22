@@ -259,6 +259,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.configure(fg_color=COLOR_BG_PRIMARY)
 
         self.scrubbing_handler = ScrubbingHandler(self)
+        self.active_scrubs = {}  # Track active scrubbing per thumbnail index
         self._internal_input_paths = []
         self.thumbnail_images = []
         self.thumbnail_paths = []
@@ -1217,18 +1218,25 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         if duration is not None:
             new_timestamp = max(0, min(new_timestamp, duration))
 
+        # Check if we are already extracting a frame for this thumbnail
+        thumb_idx = self.scrubbing_handler.thumbnail_index
+        if self.active_scrubs.get(thumb_idx, False):
+            return  # SKIP this event, previous FFmpeg is still running
+
+        self.active_scrubs[thumb_idx] = True # Set flag
+
         import tempfile
         # We use a separate temp dir for scrub shots or just overwrite in preview temp
         # Ideally separate to avoid conflicts if generating
         scrub_temp = os.path.join(self.preview_temp_dir, "scrub")
         os.makedirs(scrub_temp, exist_ok=True)
 
-        frame_filename = f"scrub_thumb_{self.scrubbing_handler.thumbnail_index}.jpg"
+        frame_filename = f"scrub_thumb_{thumb_idx}.jpg"
         output_path = os.path.join(scrub_temp, frame_filename)
 
         # Run extraction in thread
         thread = threading.Thread(target=self._scrub_frame_extraction_thread,
-                                  args=(video_path, new_timestamp, output_path, self.scrubbing_handler.thumbnail_index))
+                                  args=(video_path, new_timestamp, output_path, thumb_idx))
         thread.daemon = True
         thread.start()
 
@@ -1236,7 +1244,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         # Simple direct extraction
         thread_logger = logging.getLogger(f"scrub_{threading.get_ident()}")
         try:
-            success = video_processing.extract_specific_frame(video_path, timestamp, output_path, thread_logger, use_gpu=self.use_gpu_var.get())
+            success = video_processing.extract_specific_frame(
+                video_path, timestamp, output_path, thread_logger, use_gpu=self.use_gpu_var.get()
+            )
             if success:
                 with Image.open(output_path) as img:
                     self.queue.put(("update_thumbnail", {"index": thumb_index, "image": img.copy()}))
@@ -1250,6 +1260,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     self.thumbnail_paths[thumb_index] = output_path
         except Exception as e:
             print(f"Scrub error: {e}")
+        finally:
+            # Release the lock so the user can scrub again
+            self.active_scrubs[thumb_index] = False
 
     def stop_scrubbing(self, event):
         if self.scrubbing_handler.active:
