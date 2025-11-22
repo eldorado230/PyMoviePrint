@@ -16,7 +16,7 @@ import json
 import math
 import time
 import video_processing
-import numpy as np # Ensure numpy is imported for linspace
+import numpy as np
 from version import __version__
 from tkinterdnd2 import DND_FILES, TkinterDnD
 from PIL import ImageTk, Image
@@ -46,6 +46,7 @@ def setup_file_logging():
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
     
+    # 1. User Profile Log (Persistent)
     log_dir = os.path.expanduser(os.path.join("~", ".pymovieprint", "logs"))
     try:
         os.makedirs(log_dir, exist_ok=True)
@@ -57,6 +58,7 @@ def setup_file_logging():
     except Exception as e:
         print(f"Failed to create user profile log: {e}")
 
+    # 2. Local Session Log (Resets on launch)
     try:
         if getattr(sys, 'frozen', False):
             program_dir = os.path.dirname(sys.executable)
@@ -279,6 +281,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             "background_color_var": "background_color",
             "padding_var": "padding",
             "grid_margin_var": "grid_margin",
+            "output_quality_var": "output_quality"
         }
 
         self._init_variables()
@@ -308,6 +311,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.action_frame.grid(row=2, column=0, columnspan=2, sticky="ew")
         self._create_action_footer(self.action_frame)
 
+        # LOAD SETTINGS LAST
         self._load_persistent_settings()
 
         self.check_queue()
@@ -339,10 +343,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         if hasattr(self, 'col_slider'): self.col_slider.set(settings.num_columns)
         if hasattr(self, 'row_slider'): self.row_slider.set(settings.num_rows)
 
-        # Restore Grid from Metadata
         if state.thumbnail_metadata:
             image_paths = [item.get('frame_path') for item in state.thumbnail_metadata]
-            # Re-render grid image
             import image_grid
             grid_path = os.path.join(self.preview_temp_dir, "preview_restored.jpg")
             try:
@@ -409,18 +411,23 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             "input_paths_var": "", "output_dir_var": "", "extraction_mode_var": "interval",
             "interval_seconds_var": "5.0", "interval_frames_var": "", "shot_threshold_var": "27.0",
             "exclude_frames_var": "", "exclude_shots_var": "", "layout_mode_var": "grid",
-            "num_columns_var": "5", "num_rows_var": "5", "target_row_height_var": "150",
+            "num_columns_var": "5", 
+            "num_rows_var": "5", 
+            "target_row_height_var": "150",
             "output_image_width_var": "1920", "padding_var": "5", "background_color_var": "#1e1e1e",
             "frame_format_var": "jpg", "save_metadata_json_var": True, "detect_faces_var": False,
             "rotate_thumbnails_var": 0, "start_time_var": "", "end_time_var": "",
-            "output_filename_suffix_var": "_movieprint", "output_filename_var": "",
+            "output_filename_suffix_var": "-thumb", "output_filename_var": "",
             "video_extensions_var": ".mp4,.avi,.mov,.mkv,.flv,.wmv", "recursive_scan_var": False,
             "temp_dir_var": "", "haar_cascade_xml_var": "", "max_frames_for_print_var": "100",
             "target_thumbnail_width_var": "", "output_width_var": "", "output_height_var": "",
-            "target_thumbnail_height_var": "", "max_output_filesize_kb_var": "", "preview_quality_var": 75,
+            "target_thumbnail_height_var": "", "max_output_filesize_kb_var": "", 
+            "preview_quality_var": 75, 
+            "output_quality_var": 95,
             "grid_margin_var": "0", "show_header_var": True, "show_file_path_var": True,
             "show_timecode_var": True, "show_frame_num_var": True, "rounded_corners_var": "0",
-            "frame_info_show_var": True, "frame_info_timecode_or_frame_var": "timecode",
+            "frame_info_show_var": False, # Default off as requested
+            "frame_info_timecode_or_frame_var": "timecode",
             "frame_info_font_color_var": "#FFFFFF", "frame_info_bg_color_var": "#000000",
             "frame_info_position_var": "bottom_left", "frame_info_size_var": "10", "frame_info_margin_var": "5",
             "use_gpu_var": False
@@ -436,10 +443,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.num_rows_var = tk.StringVar(value="5")
         self.target_row_height_var = tk.StringVar(value="150")
         self.max_frames_for_print_var = tk.StringVar(value="100")
-        # self.max_frames_for_print_var.trace_add("write", self._handle_max_frames_change) # Removed for dynamic mode
         self.padding_var = tk.StringVar(value="5")
         self.background_color_var = tk.StringVar(value="#1e1e1e")
         self.preview_quality_var = tk.IntVar(value=75)
+        self.output_quality_var = tk.IntVar(value=95)
         self.zoom_level_var = tk.DoubleVar(value=1.0)
 
         startup_logger = logging.getLogger("startup_check")
@@ -570,19 +577,28 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.CTkLabel(parent, text="Output Directory:").pack(anchor="w")
         ctk.CTkEntry(parent, textvariable=self.output_dir_var).pack(fill="x", pady=5)
         ctk.CTkButton(parent, text="Select Output", command=self.browse_output_dir, fg_color=COLOR_BG_SECONDARY, border_width=1, border_color=COLOR_ACCENT_CYAN).pack(fill="x", pady=5)
+        
+        # Toggles
         ctk.CTkSwitch(parent, text="Show Frame Info/Timecode", variable=self.frame_info_show_var, progress_color=COLOR_ACCENT_CYAN).pack(anchor="w", pady=5)
         ctk.CTkCheckBox(parent, text="Detect Faces", variable=self.detect_faces_var, fg_color=COLOR_ACCENT_CYAN, hover_color=COLOR_BUTTON_HOVER).pack(anchor="w", pady=2)
         ctk.CTkCheckBox(parent, text="Use GPU (FFmpeg)", variable=self.use_gpu_var, fg_color=COLOR_ACCENT_CYAN, hover_color=COLOR_BUTTON_HOVER).pack(anchor="w", pady=2)
         ctk.CTkCheckBox(parent, text="Show Header", variable=self.show_header_var, fg_color=COLOR_ACCENT_CYAN, hover_color=COLOR_BUTTON_HOVER).pack(anchor="w", pady=2)
         ctk.CTkCheckBox(parent, text="Show Timecode", variable=self.show_timecode_var, fg_color=COLOR_ACCENT_CYAN, hover_color=COLOR_BUTTON_HOVER).pack(anchor="w", pady=2)
+        
         ctk.CTkLabel(parent, text="Rotate Thumbnails:").pack(anchor="w", pady=(10, 0))
         self.rotate_seg = ctk.CTkSegmentedButton(parent, values=["0", "90", "180", "270"], variable=self.rotate_thumbnails_var, selected_color=COLOR_ACCENT_CYAN, selected_hover_color=COLOR_BUTTON_HOVER)
         self.rotate_seg.pack(fill="x", pady=5)
         ctk.CTkLabel(parent, text="Background Color:").pack(anchor="w", pady=(10,0))
         ctk.CTkEntry(parent, textvariable=self.background_color_var).pack(fill="x", pady=5)
         ctk.CTkButton(parent, text="Pick Color", command=self.pick_bg_color, width=80, fg_color=COLOR_BG_SECONDARY).pack(anchor="w")
-        ctk.CTkLabel(parent, text="Preview Quality:").pack(anchor="w", pady=(10,0))
+        
+        # Qualities
+        ctk.CTkLabel(parent, text="Preview Quality (Fast):").pack(anchor="w", pady=(10,0))
         ctk.CTkSlider(parent, from_=10, to=100, variable=self.preview_quality_var).pack(fill="x")
+        
+        ctk.CTkLabel(parent, text="Output Quality (JPG):").pack(anchor="w", pady=(10,0))
+        ctk.CTkSlider(parent, from_=10, to=100, variable=self.output_quality_var, progress_color=COLOR_ACCENT_CYAN).pack(fill="x")
+        
         self.update_visibility_state()
 
     def _create_action_footer(self, parent):
@@ -599,12 +615,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _on_col_slider_change(self, value):
         self.num_columns_var.set(int(value))
-        # self.on_layout_change(value) # Disabled dynamic layout change for v004 style
         self._update_live_math()
 
     def _on_row_slider_change(self, value):
         self.num_rows_var.set(int(value))
-        # self.on_layout_change(value) # Disabled dynamic layout change for v004 style
         self._update_live_math()
 
     def _on_extraction_mode_change(self, value):
@@ -642,8 +656,6 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         except Exception: pass
 
     def on_layout_change(self, val):
-        # DEPRECATED in v004 Style (Dynamic)
-        # We don't re-render grid on slider drag anymore, as we need to re-extract
         pass
 
     def _cleanup_garbage_dirs(self):
@@ -709,6 +721,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     if "show_header" in settings: self.show_header_var.set(settings["show_header"])
                     if "show_timecode" in settings: self.show_timecode_var.set(settings["show_timecode"])
                     if "preview_quality" in settings: self.preview_quality_var.set(settings["preview_quality"])
+                    if "output_quality_var" in settings: self.output_quality_var.set(settings["output_quality_var"])
                     
                     # Force visibility update based on loaded modes
                     self.update_visibility_state()
@@ -733,7 +746,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             "detect_faces": self.detect_faces_var.get(),
             "show_header": self.show_header_var.get(),
             "show_timecode": self.show_timecode_var.get(),
-            "preview_quality": self.preview_quality_var.get()
+            "preview_quality": self.preview_quality_var.get(),
+            "output_quality_var": self.output_quality_var.get()
         }
         try:
             with open(SETTINGS_FILE, 'w') as f: json.dump(settings, f, indent=4)
@@ -749,7 +763,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     current, total, fname = data
                     if total > 0:
                         self.progress_bar.set(current / total)
-                        self.status_lbl.configure(text=f"Processing {current}/{total}...")
+                        if current < total:
+                            self.status_lbl.configure(text=f"Processing {current}/{total}...")
+                        else:
+                            self.status_lbl.configure(text="Processing Complete.")
                 elif msg_type == "preview_done":
                     self._handle_preview_done(data)
                 elif msg_type == "update_thumbnail":
@@ -763,6 +780,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         meta = data.get("meta")
         layout = data.get("layout")
         
+        self.cached_pool_metadata = meta
+        self.cached_pool = [m['frame_path'] for m in meta]
         self.thumbnail_metadata = meta
         self.thumbnail_layout_data = layout
         
@@ -777,6 +796,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._update_live_math()
         
         current_state = self.state_manager.get_state()
+        current_state.cached_pool_metadata = meta
         current_state.thumbnail_metadata = meta
         current_state.thumbnail_layout_data = layout
         self.state_manager.update_state(current_state, commit=True)
@@ -814,7 +834,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         if c[1]: self.background_color_var.set(c[1])
 
     def _auto_calculate_and_set_interval(self, video_path):
-        pass # No longer needed in dynamic mode
+        pass
 
     def _get_video_duration_sync(self, video_path):
         try:
@@ -828,7 +848,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         return None
 
     def _handle_max_frames_change(self, *args):
-        pass # No longer needed in dynamic mode
+        pass
 
     def start_thumbnail_preview_generation(self):
         if not self._internal_input_paths: return
@@ -850,17 +870,18 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         thread_logger = logging.getLogger(f"preview_{threading.get_ident()}")
         thread_logger.addHandler(QueueHandler(self.queue))
         thread_logger.setLevel(logging.INFO)
+        
         start_time = time.time()
         try:
             duration = self._get_video_duration_sync(video_path)
             if not duration: duration = 600
             
-            # DYNAMIC MODE: Calculate exact timestamps
             cols = int(self.num_columns_var.get())
             rows = int(self.num_rows_var.get())
             total_frames = cols * rows
             
-            timestamps = np.linspace(0, duration, total_frames+2)[1:-1] # Start slightly in, end slightly before
+            # Calculate timestamps evenly
+            timestamps = np.linspace(0, duration, total_frames+2)[1:-1]
             
             self.queue.put(("log", f"Extracting {total_frames} frames (Dynamic Mode)..."))
             success, meta = video_processing.extract_frames_from_timestamps(
@@ -879,7 +900,15 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     columns=cols,
                     background_color_hex=self.background_color_var.get(),
                     padding=int(self.padding_var.get()),
-                    logger=thread_logger
+                    logger=thread_logger,
+                    # PASS UI TOGGLE SETTINGS TO GRID
+                    frame_info_show=self.frame_info_show_var.get(),
+                    frame_info_timecode_or_frame=self.frame_info_timecode_or_frame_var.get(),
+                    frame_info_font_color=self.frame_info_font_color_var.get(),
+                    frame_info_bg_color=self.frame_info_bg_color_var.get(),
+                    frame_info_position=self.frame_info_position_var.get(),
+                    frame_info_size=int(self.frame_info_size_var.get()),
+                    frame_info_margin=int(self.frame_info_margin_var.get())
                 )
                 if grid_success:
                     elapsed = time.time() - start_time
@@ -906,8 +935,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         output_dir = self.output_dir_var.get()
         if not hasattr(self, '_internal_input_paths') or not self._internal_input_paths:
             if input_paths_str: self._internal_input_paths = [p.strip() for p in input_paths_str.split(';') if p.strip()]
-            else: messagebox.showerror("Input Error", "Please select video file(s) or a directory."); return
-        if not output_dir: messagebox.showerror("Input Error", "Please select an output directory."); return
+            else: messagebox.showerror("Input Error", "Please select video file(s)."); return
+        if not output_dir: messagebox.showerror("Input Error", "Please select output directory."); return
         settings = argparse.Namespace()
         settings.input_paths = self._internal_input_paths
         settings.output_dir = output_dir
@@ -919,21 +948,30 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             settings.detect_faces = self.detect_faces_var.get()
             settings.rotate_thumbnails = int(self.rotate_thumbnails_var.get())
             
-            # Force grid logic for dynamic mode
+            # Capture Output Quality
+            settings.output_quality = int(self.output_quality_var.get())
+
             rows = int(self.num_rows_var.get())
             cols = int(self.num_columns_var.get())
-            settings.rows = rows
-            settings.columns = cols
-            settings.max_frames_for_print = rows * cols # Explicit count
-            settings.target_row_height = None
-            
-            # Calculate interval for final output based on exact count
-            video_path = self._internal_input_paths[0]
-            duration = self._get_video_duration_sync(video_path)
-            if duration:
-                settings.interval_seconds = duration / (rows * cols)
+            if settings.layout_mode == "grid":
+                settings.rows = rows
+                settings.columns = cols
+                settings.max_frames_for_print = rows * cols
+                settings.target_row_height = None
+                
+                # Calculate interval for final output based on exact count
+                video_path = self._internal_input_paths[0]
+                duration = self._get_video_duration_sync(video_path)
+                if duration:
+                    settings.interval_seconds = duration / (rows * cols)
+                else:
+                    settings.interval_seconds = 1.0
             else:
-                settings.interval_seconds = 1.0
+                settings.rows = None
+                settings.columns = None
+                settings.max_frames_for_print = None
+                settings.target_row_height = int(self.target_row_height_var.get() or 150)
+                settings.interval_seconds = None
 
             settings.padding = int(self.padding_var.get())
             settings.background_color = self.background_color_var.get()
@@ -943,18 +981,18 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             settings.end_time = None
             settings.exclude_frames = None
             settings.exclude_shots = None
-            settings.output_filename_suffix = "_movieprint"
-            settings.output_filename = None
-            settings.video_extensions = ".mp4,.avi"
+            settings.output_filename_suffix = self.output_filename_suffix_var.get()
+            settings.output_filename = self.output_filename_var.get() or None
+            settings.video_extensions_var = ".mp4,.avi"
             settings.recursive_scan = False
             settings.temp_dir = None
             settings.haar_cascade_xml = None
-            settings.grid_margin = 0
+            settings.grid_margin = int(self.grid_margin_var.get())
             settings.show_header = self.show_header_var.get()
             settings.show_file_path = self.show_file_path_var.get()
             settings.show_timecode = self.show_timecode_var.get()
             settings.show_frame_num = self.show_frame_num_var.get()
-            settings.rounded_corners = 0
+            settings.rounded_corners = int(self.rounded_corners_var.get())
             settings.max_output_filesize_kb = None
             settings.use_gpu = self.use_gpu_var.get()
             settings.interval_frames = None
@@ -963,15 +1001,20 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             settings.output_width = None
             settings.output_height = None
             settings.target_thumbnail_height = None
-            settings.frame_info_timecode_or_frame = "timecode"
-            settings.frame_info_font_color = "#FFFFFF"
-            settings.frame_info_bg_color = "#000000"
-            settings.frame_info_position = "bottom_left"
-            settings.frame_info_size = 10
-            settings.frame_info_margin = 5
+            settings.frame_info_timecode_or_frame = self.frame_info_timecode_or_frame_var.get()
+            settings.frame_info_font_color = self.frame_info_font_color_var.get()
+            settings.frame_info_bg_color = self.frame_info_bg_color_var.get()
+            settings.frame_info_position = self.frame_info_position_var.get()
+            settings.frame_info_size = int(self.frame_info_size_var.get())
+            settings.frame_info_margin = int(self.frame_info_margin_var.get())
+            
+            # Required for maker compatibility if not set
+            settings.video_extensions = ".mp4,.avi,.mov,.mkv,.flv,.wmv"
+
         except Exception as e:
              messagebox.showerror("Error", str(e))
              return
+        
         self.status_lbl.configure(text="Generating...")
         self.progress_bar.configure(mode="determinate")
         thread = threading.Thread(target=self.run_generation_in_thread, args=(settings, self._gui_progress_callback))
@@ -1050,6 +1093,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 if thumb_index < len(self.thumbnail_metadata):
                     self.thumbnail_metadata[thumb_index]['timestamp_sec'] = timestamp
                     self.thumbnail_metadata[thumb_index]['frame_path'] = output_path
+                if thumb_index < len(self.thumbnail_paths):
+                    self.thumbnail_paths[thumb_index] = output_path
         except Exception as e:
             print(f"Scrub error: {e}")
         finally:

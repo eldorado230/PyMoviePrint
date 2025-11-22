@@ -7,7 +7,7 @@ import glob
 import json
 import re
 import cv2
-import math # For ceil, for frame selection
+import math 
 from version import __version__
 from PIL import Image
 
@@ -117,10 +117,52 @@ def _setup_temp_directory(video_file_path, settings, logger):
         except Exception as e:
             return None, False, f"Error creating temporary directory: {e}"
 
+def _get_video_duration(video_path, logger):
+    """Helper to get exact video duration using OpenCV."""
+    try:
+        cap = cv2.VideoCapture(video_path)
+        if cap.isOpened():
+            fps = cap.get(cv2.CAP_PROP_FPS)
+            count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
+            cap.release()
+            if fps > 0:
+                return count / fps
+    except Exception as e:
+        logger.warning(f"Could not determine duration for {video_path}: {e}")
+    return 0.0
 
 def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, logger, fast_preview=False):
-    """Extracts frames from the video based on settings."""
+    """
+    Extracts frames based on settings.
+    UPDATED: Now prefers 'Timestamp' extraction for Grids to match GUI preview logic.
+    """
+    
+    # NEW LOGIC: If it's a Grid, calculate timestamps directly (MoviePrint v004 style)
+    # This bypasses the old "Interval" logic to ensure we get exactly Rows*Cols frames
+    if settings.layout_mode == "grid" and getattr(settings, 'columns', None) and getattr(settings, 'rows', None):
+        logger.info("  Layout is Grid: Calculating exact timestamps for extraction (On-Demand mode)...")
+        
+        duration = _get_video_duration(video_file_path, logger)
+        if duration > 0:
+            total_frames = settings.columns * settings.rows
+            
+            # Calculate timestamps evenly spaced, skipping very start and very end
+            # Equivalent to: np.linspace(0, duration, total_frames + 2)[1:-1]
+            step = duration / (total_frames + 1)
+            timestamps = [(i + 1) * step for i in range(total_frames)]
+            
+            return video_processing.extract_frames_from_timestamps(
+                video_path=video_file_path, 
+                timestamps=timestamps, 
+                output_folder=temp_dir, 
+                logger=logger, 
+                output_format=settings.frame_format,
+                fast_preview=fast_preview
+            )
+
+    # Fallback to old logic for Timeline mode or if Grid settings are missing
     use_gpu = getattr(settings, 'use_gpu', False)
+    
     if settings.extraction_mode == "interval":
         return video_processing.extract_frames(
             video_path=video_file_path, output_folder=temp_dir,
@@ -296,7 +338,8 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
         'frame_info_bg_color': settings.frame_info_bg_color,
         'frame_info_position': settings.frame_info_position,
         'frame_info_size': settings.frame_info_size,
-        'frame_info_margin': settings.frame_info_margin
+        'frame_info_margin': settings.frame_info_margin,
+        'quality': getattr(settings, 'output_quality', 95) # Pass quality from settings
     }
     if settings.layout_mode == "grid":
         grid_params.update({'rows': getattr(settings, 'rows', None),
@@ -369,6 +412,7 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
         return False, error
 
     try:
+        # Use dynamic extraction in grid mode (new), or fallback to interval (old)
         extraction_ok, metadata_list = _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, logger, fast_preview=fast_preview)
         if not extraction_ok:
             return False, f"Frame extraction failed for {video_file_path}."
@@ -531,6 +575,7 @@ def main():
                                    "Requires FFmpeg with CUDA support in system PATH.")
     common_group.add_argument("--fast", "--draft", action="store_true", dest="fast_preview",
                               help="Enable fast preview mode (uses keyframes only, less accurate timestamps).")
+    common_group.add_argument("--output_quality", type=int, default=95, help="Output quality for JPG images (1-100).")
 
     args = parser.parse_args()
 
@@ -542,7 +587,10 @@ def main():
 
     if args.extraction_mode == "interval":
         if args.interval_seconds is None and args.interval_frames is None:
-            parser.error("For --extraction_mode 'interval', --interval_seconds or --interval_frames required.")
+            # In grid mode with full rows/cols, we can dynamic calc, so relax this check if rows/cols present
+            if not (args.layout_mode == 'grid' and args.rows and args.columns):
+                 # Standard interval check
+                 parser.error("For --extraction_mode 'interval', --interval_seconds or --interval_frames required.")
         if args.exclude_shots: parser.error("--exclude_shots only with --extraction_mode 'shot'.")
     elif args.extraction_mode == "shot":
         if args.exclude_frames: parser.error("--exclude_frames only with --extraction_mode 'interval'.")
