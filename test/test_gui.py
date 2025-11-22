@@ -10,11 +10,11 @@ class TestMoviePrintApp(unittest.TestCase):
         app = None
         try:
             app = MoviePrintApp()
-            self.assertIsNotNone(app.root)
-            self.assertEqual(app.root.title(), f"MoviePrint Generator v{__version__}")
+            self.assertIsNotNone(app)
+            self.assertEqual(app.title(), f"PyMoviePrint Generator v{__version__}")
         finally:
             if app:
-                app.root.destroy()
+                app.destroy()
 
 if __name__ == '__main__':
     unittest.main()

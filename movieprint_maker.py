@@ -404,7 +404,7 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
                 logger.error(f"  Error cleaning up temp directory {temp_dir}: {e}")
 
 def execute_movieprint_generation(settings, logger, progress_callback=None):
-    logger.info("Starting MoviePrint generation process...")
+    logger.info("Starting PyMoviePrint generation process...")
 
     video_files_to_process = discover_video_files(
         settings.input_paths,
@@ -462,7 +462,7 @@ def execute_movieprint_generation(settings, logger, progress_callback=None):
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Create MoviePrints from video files or directories.",
+        description="Create PyMoviePrints from video files or directories.",
         formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')

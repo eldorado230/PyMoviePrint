@@ -247,7 +247,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         super().__init__()
         self.TkdndVersion = TkinterDnD._require(self)
 
-        self.title(f"MoviePrint Generator v{__version__}")
+        self.title(f"PyMoviePrint Generator v{__version__}")
         self.geometry("1500x950")
         self.configure(fg_color=COLOR_BG_PRIMARY)
 
@@ -307,7 +307,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             "input_paths_var": "", "output_dir_var": "", "extraction_mode_var": "interval",
             "interval_seconds_var": "5.0", "interval_frames_var": "", "shot_threshold_var": "27.0",
             "exclude_frames_var": "", "exclude_shots_var": "", "layout_mode_var": "grid",
-            "num_columns_var": "5", "num_rows_var": "", "target_row_height_var": "150",
+            "num_columns_var": "5", "num_rows_var": "5", "target_row_height_var": "150",
             "output_image_width_var": "1920", "padding_var": "5", "background_color_var": "#1e1e1e",
             "frame_format_var": "jpg", "save_metadata_json_var": True, "detect_faces_var": False,
             "rotate_thumbnails_var": 0, "start_time_var": "", "end_time_var": "",
@@ -352,7 +352,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         parent.grid_rowconfigure(4, weight=1) # Spacer
 
         # Header
-        header_lbl = ctk.CTkLabel(parent, text="MOVIEPRINT", font=("Impact", 60), text_color=COLOR_TEXT_MAIN)
+        header_lbl = ctk.CTkLabel(parent, text="PYMOVIEPRINT", font=("Impact", 60), text_color=COLOR_TEXT_MAIN)
         header_lbl.grid(row=1, column=0, pady=(20, 5))
         sub_lbl = ctk.CTkLabel(parent, text="create screenshots of entire movies in an instant.", font=("Roboto", 16), text_color=COLOR_TEXT_MUTED)
         sub_lbl.grid(row=2, column=0, pady=(0, 30))
@@ -455,22 +455,18 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.col_slider.set(5)
         self.col_slider.pack(fill="x", pady=(0, 15))
 
-        # Interval Slider (Seconds)
-        ctk.CTkLabel(frame, text="INTERVAL (SEC)", font=("Roboto", 12, "bold"), text_color=COLOR_TEXT_MAIN).pack(anchor="w")
-        self.int_slider = ctk.CTkSlider(frame, from_=1, to=60, number_of_steps=590, command=self._on_int_slider_change, progress_color=COLOR_ACCENT_CYAN, button_color=COLOR_ACCENT_GLOW, button_hover_color="white")
-        self.int_slider.set(5.0)
-        self.int_slider.pack(fill="x", pady=(0, 15))
-
-        # Max Frames Slider
-        ctk.CTkLabel(frame, text="MAX FRAMES", font=("Roboto", 12, "bold"), text_color=COLOR_TEXT_MAIN).pack(anchor="w")
-        self.max_frames_slider = ctk.CTkSlider(frame, from_=10, to=300, command=self._on_max_frames_slider_change, progress_color=COLOR_ACCENT_CYAN, button_color=COLOR_ACCENT_GLOW, button_hover_color="white")
-        self.max_frames_slider.set(100)
-        self.max_frames_slider.pack(fill="x", pady=(0, 15))
+        # Rows Slider
+        ctk.CTkLabel(frame, text="ROWS", font=("Roboto", 12, "bold"), text_color=COLOR_TEXT_MAIN).pack(anchor="w")
+        self.row_slider = ctk.CTkSlider(frame, from_=1, to=20, number_of_steps=19, variable=None, command=self._on_row_slider_change, progress_color=COLOR_ACCENT_CYAN, button_color=COLOR_ACCENT_GLOW, button_hover_color="white")
+        self.row_slider.set(5)
+        self.row_slider.pack(fill="x", pady=(0, 15))
 
     def _populate_advanced_settings(self, parent):
         ctk.CTkLabel(parent, text="Output Directory:").pack(anchor="w")
         ctk.CTkEntry(parent, textvariable=self.output_dir_var).pack(fill="x", pady=5)
         ctk.CTkButton(parent, text="Select Output", command=self.browse_output_dir, fg_color=COLOR_BG_SECONDARY, border_width=1, border_color=COLOR_ACCENT_CYAN).pack(fill="x", pady=5)
+
+        # Disabled Timeline/Layout choices here to prevent confusion as we now enforce Grid + Rows/Cols
 
         ctk.CTkCheckBox(parent, text="Show Header", variable=self.show_header_var, fg_color=COLOR_ACCENT_CYAN, hover_color=COLOR_BUTTON_HOVER).pack(anchor="w", pady=2)
         ctk.CTkCheckBox(parent, text="Show Timecode", variable=self.show_timecode_var, fg_color=COLOR_ACCENT_CYAN, hover_color=COLOR_BUTTON_HOVER).pack(anchor="w", pady=2)
@@ -503,40 +499,79 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
     # --- Live Math & Slider Logic ---
     def _on_col_slider_change(self, value):
         self.num_columns_var.set(int(value))
+        self.on_layout_change(value)
         self._update_live_math()
 
-    def _on_int_slider_change(self, value):
-        self.interval_seconds_var.set(f"{value:.1f}")
-
-    def _on_max_frames_slider_change(self, value):
-        self.max_frames_for_print_var.set(int(value))
+    def _on_row_slider_change(self, value):
+        self.num_rows_var.set(int(value))
+        self.on_layout_change(value)
+        self._update_live_math()
 
     def _update_live_math(self, *args):
         try:
             cols = int(self.num_columns_var.get())
-            rows_val = self.num_rows_var.get()
-            rows = int(rows_val) if rows_val else "?"
+            rows = int(self.num_rows_var.get() or 5)
 
             self.math_lbl_cols.configure(text=str(cols))
+            self.math_lbl_rows.configure(text=str(rows))
+            self.math_lbl_res.configure(text=str(cols * rows))
 
-            if rows != "?":
-                self.math_lbl_rows.configure(text=str(rows))
-                self.math_lbl_res.configure(text=str(cols * rows))
-            else:
-                # If rows are dynamic (based on frame count), we might estimate or show ?
-                # For now, if user hasn't hardcoded rows, it depends on the video.
-                # If we have metadata from a preview, we can calculate it.
-                if self.thumbnail_layout_data:
-                     # Calculate based on preview
-                     count = len(self.thumbnail_layout_data)
-                     calc_rows = (count + cols - 1) // cols
-                     self.math_lbl_rows.configure(text=str(calc_rows))
-                     self.math_lbl_res.configure(text=str(count))
-                else:
-                    self.math_lbl_rows.configure(text="?")
-                    self.math_lbl_res.configure(text="?")
         except Exception:
             pass
+
+    def on_layout_change(self, val):
+        # Live update of the preview grid based on slider values
+        if not hasattr(self, 'cached_pool') or not self.cached_pool:
+            return
+
+        cols = int(self.num_columns_var.get())
+        rows = int(self.num_rows_var.get() or 5)
+        total_needed = cols * rows
+
+        # Select 'total_needed' frames from cached_pool evenly
+        import numpy as np
+        pool_size = len(self.cached_pool)
+        if pool_size == 0: return
+
+        if pool_size <= total_needed:
+            selected_paths = self.cached_pool # Use all if we have fewer than needed
+        else:
+            indices = np.linspace(0, pool_size - 1, total_needed, dtype=int)
+            selected_paths = [self.cached_pool[i] for i in indices]
+
+        # We also need to fake the metadata list for the scrubbing handler
+        # We can reconstruct a temporary metadata list if needed, but for scrubbing
+        # we need original timestamps. We can store the full metadata pool too.
+        if hasattr(self, 'cached_pool_metadata'):
+             if pool_size <= total_needed:
+                 selected_meta = self.cached_pool_metadata
+             else:
+                 selected_meta = [self.cached_pool_metadata[i] for i in indices]
+             self.thumbnail_metadata = selected_meta
+
+        # Render new grid
+        # We run this on the main thread for responsiveness, but image_grid is fast for ~100 images.
+        # If it lags, we might need to debounce or thread it.
+        import image_grid
+        grid_path = os.path.join(self.preview_temp_dir, "preview_live.jpg")
+
+        # Note: We use a simpler call here, or we can reuse create_image_grid.
+        # We need to be careful not to block GUI too much.
+        # For now, direct call.
+        try:
+            grid_success, layout = image_grid.create_image_grid(
+                image_source_data=selected_paths,
+                output_path=grid_path,
+                columns=cols,
+                background_color_hex=self.background_color_var.get(),
+                padding=int(self.padding_var.get()),
+                logger=logging.getLogger("layout_change") # Dummy logger
+            )
+            self.thumbnail_layout_data = layout
+            if grid_success:
+                self.preview_zoomable_canvas.set_image(grid_path)
+        except Exception as e:
+            print(f"Layout update error: {e}")
 
     # --- Functionality Hooks (Adapting old methods) ---
     def _on_closing(self):
@@ -607,7 +642,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     pass
                 elif msg_type == "preview_grid":
                     self._display_thumbnail_preview(data)
-                    self._update_live_math() # Update math with real count
+                    # Explicitly trigger layout update if we have new pool data but no grid yet
+                    if not data.get("grid_path") and hasattr(self, 'cached_pool') and self.cached_pool:
+                        self.on_layout_change(None)
+                    self._update_live_math()
                 elif msg_type == "update_thumbnail":
                     self.update_thumbnail_in_preview(data['index'], data['image'])
 
@@ -629,11 +667,13 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             grid_path = data
             temp_dir = None
 
-        self.preview_zoomable_canvas.set_image(grid_path)
+        if grid_path: # Only set if path exists (might be empty for initial pool load)
+            self.preview_zoomable_canvas.set_image(grid_path)
 
-        if temp_dir:
-            import shutil
-            self.after(1000, lambda: shutil.rmtree(temp_dir, ignore_errors=True))
+        # Removed auto-cleanup to allow preview to persist
+        # if temp_dir:
+        #     import shutil
+        #     self.after(1000, lambda: shutil.rmtree(temp_dir, ignore_errors=True))
 
     # --- Action Wrappers ---
     def browse_input_paths(self):
@@ -724,32 +764,26 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         temp_dir = self.preview_temp_dir
         try:
-            interval = float(self.interval_seconds_var.get())
+            # New Logic: Extraction Pool
+            duration = self._get_video_duration_sync(video_path)
+            if not duration: duration = 600 # Fallback
+
+            # Target pool size ~400
+            interval = duration / 400.0
+            if interval < 0.1: interval = 0.1
+
             success, meta = video_processing.extract_frames(video_path, temp_dir, thread_logger, interval_seconds=interval)
             
             if success:
-                # Sample down if needed
-                max_f = int(self.max_frames_for_print_var.get())
-                if len(meta) > max_f:
-                    indices = [int(i * (len(meta) - 1) / (max_f - 1)) for i in range(max_f)]
-                    meta = [meta[i] for i in indices]
+                self.cached_pool_metadata = meta
+                self.cached_pool = [m['frame_path'] for m in meta]
 
-                self.thumbnail_metadata = meta
-                self.thumbnail_paths = [m['frame_path'] for m in meta]
+                # Trigger initial layout render (using default or current slider values)
+                # Since we are in a thread, we can't update GUI directly or call on_layout_change easily if it touches GUI.
+                # But on_layout_change mostly does logic. However, setting image on canvas must be on main thread.
+                # We'll use the queue to trigger the initial render on main thread.
+                self.queue.put(("preview_grid", {"grid_path": "", "temp_dir": temp_dir})) # Payload triggers update via on_layout_change
 
-                grid_path = os.path.join(temp_dir, "preview.jpg")
-                grid_success, layout = image_grid.create_image_grid(
-                    image_source_data=[m['frame_path'] for m in meta],
-                    output_path=grid_path,
-                    columns=int(self.num_columns_var.get()),
-                    background_color_hex=self.background_color_var.get(),
-                    padding=int(self.padding_var.get()),
-                    logger=thread_logger
-                )
-                self.thumbnail_layout_data = layout
-
-                if grid_success:
-                    self.queue.put(("preview_grid", {"grid_path": grid_path, "temp_dir": temp_dir}))
         except Exception as e:
             self.queue.put(("log", f"Error: {e}"))
         finally:
@@ -774,8 +808,26 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         settings.layout_mode = self.layout_mode_var.get()
 
         try:
-            settings.interval_seconds = float(self.interval_seconds_var.get()) if self.interval_seconds_var.get() else None
-            settings.columns = int(self.num_columns_var.get()) if self.num_columns_var.get() else 5
+            # Force Grid layout and use new Rows/Cols logic
+            settings.layout_mode = "grid"
+
+            rows = int(self.num_rows_var.get() or 5)
+            cols = int(self.num_columns_var.get() or 5)
+            total_target = rows * cols
+
+            settings.rows = rows
+            settings.columns = cols
+            settings.max_frames_for_print = total_target
+
+            # Calculate interval based on duration (Overshoot strategy)
+            video_path = self._internal_input_paths[0]
+            duration = self._get_video_duration_sync(video_path)
+            if duration:
+                settings.interval_seconds = duration / (total_target * 1.1)
+            else:
+                # Fallback if duration unknown
+                settings.interval_seconds = 1.0
+
             # ... basic settings for brevity, assuming defaults/simple logic ...
             settings.padding = int(self.padding_var.get())
             settings.background_color = self.background_color_var.get()
@@ -793,7 +845,6 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             settings.recursive_scan = False
             settings.temp_dir = None
             settings.haar_cascade_xml = None
-            settings.max_frames_for_print = int(self.max_frames_for_print_var.get())
             settings.grid_margin = 0
             settings.show_header = self.show_header_var.get()
             settings.show_file_path = self.show_file_path_var.get()
@@ -806,7 +857,6 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             # Add missing required fields with None
             settings.interval_frames = None
             settings.shot_threshold = 27.0
-            settings.rows = None
             settings.target_row_height = 150
             settings.output_image_width = 1920
             settings.target_thumbnail_width = None
