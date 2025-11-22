@@ -7,6 +7,7 @@ import os
 import sys
 import platform
 import shutil
+import tempfile
 import argparse
 import threading
 import queue
@@ -309,6 +310,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         self.scrubbing_handler = ScrubbingHandler(self)
         self.active_scrubs = {}  # Track active scrubbing per thumbnail index
+        self.temp_dirs_to_cleanup = []  # Track old folders for lazy cleanup
         self._internal_input_paths = []
         self.thumbnail_images = []
         self.thumbnail_paths = []
@@ -897,11 +899,30 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             print(f"Layout update error: {e}")
 
     # --- Functionality Hooks (Adapting old methods) ---
+    def _cleanup_garbage_dirs(self):
+        """Attempts to remove old temporary directories. Ignores errors if files are locked."""
+        remaining_dirs = []
+        for d in self.temp_dirs_to_cleanup:
+            try:
+                if os.path.exists(d):
+                    shutil.rmtree(d) # Try to delete
+            except OSError:
+                # If locked/in-use, keep it in the list for next time
+                remaining_dirs.append(d)
+        self.temp_dirs_to_cleanup = remaining_dirs
+
     def _on_closing(self):
         self._save_persistent_settings()
         if self.preview_temp_dir and os.path.exists(self.preview_temp_dir):
-            import shutil
-            shutil.rmtree(self.preview_temp_dir, ignore_errors=True)
+            self.temp_dirs_to_cleanup.append(self.preview_temp_dir)
+
+        for d in self.temp_dirs_to_cleanup:
+            try:
+                if os.path.exists(d):
+                    shutil.rmtree(d, ignore_errors=True)
+            except Exception:
+                pass
+
         self.destroy()
 
     def _load_persistent_settings(self):
@@ -1080,22 +1101,28 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def start_thumbnail_preview_generation(self):
         # ... Adaptation of previous method ...
-        import tempfile, shutil
         if not self._internal_input_paths: return
 
+        # FIX: Don't nuke the directory immediately. It might be in use.
         if self.preview_temp_dir and os.path.exists(self.preview_temp_dir):
-            shutil.rmtree(self.preview_temp_dir, ignore_errors=True)
-        self.preview_temp_dir = tempfile.mkdtemp(prefix="movieprint_preview_")
+            self.temp_dirs_to_cleanup.append(self.preview_temp_dir)
+
+        # Create a UNIQUE temp dir for this specific generation run
+        new_temp_dir = tempfile.mkdtemp(prefix="movieprint_preview_")
+        self.preview_temp_dir = new_temp_dir
+
+        # Clean up old garbage directories if possible (Lazy Cleanup)
+        self._cleanup_garbage_dirs()
 
         self.status_lbl.configure(text="Generating Preview...")
         self.progress_bar.configure(mode="indeterminate")
         self.progress_bar.start()
 
-        thread = threading.Thread(target=self._thumbnail_preview_thread, args=(self._internal_input_paths[0],))
+        thread = threading.Thread(target=self._thumbnail_preview_thread, args=(self._internal_input_paths[0], new_temp_dir))
         thread.daemon = True
         thread.start()
 
-    def _thumbnail_preview_thread(self, video_path):
+    def _thumbnail_preview_thread(self, video_path, temp_dir):
         # ... Logic from original ...
         # Minimal implementation for brevity
         import image_grid
@@ -1105,7 +1132,6 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         thread_logger.addHandler(QueueHandler(self.queue))
         thread_logger.setLevel(logging.INFO)
 
-        temp_dir = self.preview_temp_dir
         try:
             # New Logic: Extraction Pool
             duration = self._get_video_duration_sync(video_path)
