@@ -620,6 +620,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             indices = np.linspace(0, pool_size - 1, total_needed, dtype=int)
             selected_paths = [self.cached_pool[i] for i in indices]
 
+        self.thumbnail_paths = list(selected_paths)
+
         # We also need to fake the metadata list for the scrubbing handler
         # We can reconstruct a temporary metadata list if needed, but for scrubbing
         # we need original timestamps. We can store the full metadata pool too.
@@ -683,12 +685,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     # Update sliders from loaded settings
                     try: self.col_slider.set(int(self.num_columns_var.get()))
                     except: pass
-                    try: self.max_frames_slider.set(int(self.max_frames_for_print_var.get()))
-                    except: pass
 
                     self.interval_seconds_var.set(settings.get("interval_seconds", "5.0"))
-                    try: self.int_slider.set(float(self.interval_seconds_var.get()))
-                    except: pass
 
         except Exception as e:
             print(f"Error loading settings: {e}")
@@ -798,7 +796,6 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             frames = int(self.max_frames_for_print_var.get() or 60)
             interval = max(0.1, duration / frames)
             self.interval_seconds_var.set(f"{interval:.2f}")
-            self.int_slider.set(interval)
 
     def _get_video_duration_sync(self, video_path):
         try:
@@ -1053,6 +1050,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 if thumb_index < len(self.thumbnail_metadata):
                     self.thumbnail_metadata[thumb_index]['timestamp_sec'] = timestamp
                     self.thumbnail_metadata[thumb_index]['frame_path'] = output_path
+
+                if thumb_index < len(self.thumbnail_paths):
                     self.thumbnail_paths[thumb_index] = output_path
         except Exception as e:
             print(f"Scrub error: {e}")
