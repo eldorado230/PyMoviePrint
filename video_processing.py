@@ -29,9 +29,9 @@ def check_ffmpeg_gpu(logger):
 
 def extract_frames_ffmpeg(video_path, output_folder, logger,
                           interval_seconds=None, interval_frames=None, output_format="jpg",
-                          start_time_sec=None, end_time_sec=None, fast_preview=False):
+                          start_time_sec=None, end_time_sec=None, fast_preview=False, use_gpu=False):
     """
-    Extracts frames using FFmpeg with NVDEC GPU acceleration.
+    Extracts frames using FFmpeg, optionally with NVDEC GPU acceleration or CPU.
     """
     extracted_frame_info = []
     video_filename = os.path.basename(video_path)
@@ -65,10 +65,9 @@ def extract_frames_ffmpeg(video_path, output_folder, logger,
 
     output_pattern = os.path.join(output_folder, "ffmpeg_out_%05d." + output_format)
 
-    cmd = [
-        'ffmpeg',
-        '-hwaccel', 'cuda'
-    ]
+    cmd = ['ffmpeg']
+    if use_gpu:
+        cmd.extend(['-hwaccel', 'cuda'])
 
     if fast_preview:
         cmd.extend(['-skip_frame', 'nokey'])
@@ -183,17 +182,30 @@ def extract_frames(video_path, output_folder, logger,
         try: os.makedirs(output_folder)
         except OSError as e: logger.error(f"Error creating output folder {output_folder}: {e}"); return False, extracted_frame_info
 
-    # Try GPU path if requested
-    if use_gpu:
-        if check_ffmpeg_gpu(logger):
-            logger.info("Using FFmpeg GPU acceleration for frame extraction.")
-            return extract_frames_ffmpeg(
-                video_path, output_folder, logger,
-                interval_seconds, interval_frames, output_format,
-                start_time_sec, end_time_sec, fast_preview=fast_preview
-            )
+    # Try FFmpeg path if available (CPU or GPU)
+    has_ffmpeg = shutil.which('ffmpeg') is not None
+    # Only use FFmpeg for interval extraction logic, as our FFmpeg func is tailored for that.
+    # For very specific per-frame logic without interval, we might stick to OpenCV unless refactored.
+    # Here we support interval_seconds or interval_frames.
+    if has_ffmpeg and (interval_seconds or interval_frames):
+        can_use_gpu = False
+        if use_gpu:
+            if check_ffmpeg_gpu(logger):
+                can_use_gpu = True
+                logger.info("Using FFmpeg GPU acceleration for frame extraction.")
+            else:
+                logger.info("GPU acceleration unavailable or failed check. Using FFmpeg on CPU.")
         else:
-            logger.info("GPU acceleration unavailable or failed check. Falling back to OpenCV CPU.")
+            logger.info("Using FFmpeg on CPU for frame extraction (faster than OpenCV).")
+
+        return extract_frames_ffmpeg(
+            video_path, output_folder, logger,
+            interval_seconds, interval_frames, output_format,
+            start_time_sec, end_time_sec, fast_preview=fast_preview, use_gpu=can_use_gpu
+        )
+
+    if not has_ffmpeg and use_gpu:
+         logger.warning("GPU acceleration requested but FFmpeg not found. Falling back to OpenCV CPU.")
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():

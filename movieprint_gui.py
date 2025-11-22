@@ -178,7 +178,8 @@ class ZoomableCanvas(ctk.CTkFrame):
         new_height = int(self.original_image.height * self._zoom_level)
         if new_width < 1: new_width = 1
         if new_height < 1: new_height = 1
-        resample_filter = Image.Resampling.LANCZOS if self._zoom_level < 1.0 else Image.Resampling.NEAREST
+        # Optimization: Use BILINEAR for downscaling (< 1.0) and NEAREST for upscaling (responsiveness)
+        resample_filter = Image.Resampling.BILINEAR if self._zoom_level < 1.0 else Image.Resampling.NEAREST
         zoomed_image = self.original_image.resize((new_width, new_height), resample_filter)
         self.photo_image = ImageTk.PhotoImage(zoomed_image)
         self.canvas.itemconfig(self.image_id, image=self.photo_image)
@@ -1164,7 +1165,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         thread_logger.setLevel(logging.INFO)
         thread_logger.addHandler(QueueHandler(self.queue))
         try:
-            execute_movieprint_generation(settings, thread_logger, progress_cb)
+            # Final generation: fast_preview=False for quality
+            execute_movieprint_generation(settings, thread_logger, progress_cb, fast_preview=False)
         except Exception as e:
             thread_logger.exception(f"Error: {e}")
         finally:
@@ -1260,7 +1262,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         try:
             thumb_info = self.thumbnail_layout_data[index]
-            resized_thumb = new_thumb_img.resize((thumb_info['width'], thumb_info['height']), Image.Resampling.LANCZOS)
+            # Use BILINEAR for faster live updates during scrubbing
+            resized_thumb = new_thumb_img.resize((thumb_info['width'], thumb_info['height']), Image.Resampling.BILINEAR)
             canvas_handler.original_image.paste(resized_thumb, (thumb_info['x'], thumb_info['y']))
             canvas_handler._apply_zoom()
         except Exception as e:
