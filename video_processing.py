@@ -29,7 +29,7 @@ def check_ffmpeg_gpu(logger):
 
 def extract_frames_ffmpeg(video_path, output_folder, logger,
                           interval_seconds=None, interval_frames=None, output_format="jpg",
-                          start_time_sec=None, end_time_sec=None):
+                          start_time_sec=None, end_time_sec=None, fast_preview=False):
     """
     Extracts frames using FFmpeg with NVDEC GPU acceleration.
     """
@@ -67,10 +67,18 @@ def extract_frames_ffmpeg(video_path, output_folder, logger,
 
     cmd = [
         'ffmpeg',
-        '-hwaccel', 'cuda',
+        '-hwaccel', 'cuda'
+    ]
+
+    if fast_preview:
+        cmd.extend(['-skip_frame', 'nokey'])
+
+    cmd.extend([
         '-ss', str(start_time),
         '-i', video_path
-    ] + duration_cmd + [
+    ])
+
+    cmd += duration_cmd + [
         '-vf', vf_filter,
         '-frame_pts', '1', # helpful for debugging timing if needed, though simple output numbering is used here
         '-q:v', '2', # High quality for jpeg
@@ -142,7 +150,7 @@ def extract_specific_frame_ffmpeg(video_path, timestamp_sec, output_path, logger
 
 def extract_frames(video_path, output_folder, logger,
                    interval_seconds=None, interval_frames=None, output_format="jpg",
-                   start_time_sec=None, end_time_sec=None, use_gpu=False):
+                   start_time_sec=None, end_time_sec=None, use_gpu=False, fast_preview=False):
     """
     Extracts frames from a video file based on time or frame intervals within a specified time segment.
 
@@ -155,6 +163,7 @@ def extract_frames(video_path, output_folder, logger,
         start_time_sec (float, optional): Start time in seconds to begin extraction.
         end_time_sec (float, optional): End time in seconds to stop extraction.
         use_gpu (bool, optional): Try to use FFmpeg with NVDEC if True.
+        fast_preview (bool, optional): If True, use keyframe skipping for faster (approximate) extraction.
 
     Returns:
         tuple: (bool, list) - Success status and list of extracted frame metadata.
@@ -181,7 +190,7 @@ def extract_frames(video_path, output_folder, logger,
             return extract_frames_ffmpeg(
                 video_path, output_folder, logger,
                 interval_seconds, interval_frames, output_format,
-                start_time_sec, end_time_sec
+                start_time_sec, end_time_sec, fast_preview=fast_preview
             )
         else:
             logger.info("GPU acceleration unavailable or failed check. Falling back to OpenCV CPU.")
