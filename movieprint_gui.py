@@ -12,6 +12,7 @@ import video_processing
 from version import __version__
 from tkinterdnd2 import DND_FILES, TkinterDnD
 from PIL import ImageTk, Image
+from state_manager import StateManager
 
 # Attempt to import the backend logic
 try:
@@ -260,12 +261,28 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._internal_input_paths = []
         self.thumbnail_images = []
         self.thumbnail_paths = []
-        self.thumbnail_layout_data = []
         self.queue = queue.Queue()
         self.preview_temp_dir = None
         self.is_landing_state = True
 
+        self.state_manager = StateManager()
+        self.settings_map = {
+            "input_paths_var": "input_paths",
+            "output_dir_var": "output_dir",
+            "extraction_mode_var": "extraction_mode",
+            "interval_seconds_var": "interval_seconds",
+            "layout_mode_var": "layout_mode",
+            "num_columns_var": "num_columns",
+            "num_rows_var": "num_rows",
+            "use_gpu_var": "use_gpu",
+            "background_color_var": "background_color",
+            "padding_var": "padding",
+            "grid_margin_var": "grid_margin",
+            # Add other mappings as needed
+        }
+
         self._init_variables()
+        self._bind_settings_to_state()
         self._load_persistent_settings()
 
         # Layout
@@ -304,8 +321,146 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.check_queue()
         self.protocol("WM_DELETE_WINDOW", self._on_closing)
 
+        self.bind("<Control-z>", self.perform_undo)
+        self.bind("<Control-y>", self.perform_redo)
+
         # Initial Live Math Update
         self._update_live_math()
+
+    def perform_undo(self, event=None):
+        new_state = self.state_manager.undo()
+        if new_state:
+            self.refresh_ui_from_state(new_state)
+
+    def perform_redo(self, event=None):
+        new_state = self.state_manager.redo()
+        if new_state:
+            self.refresh_ui_from_state(new_state)
+
+    def refresh_ui_from_state(self, state):
+        # 1. Update Settings Variables
+        settings = state.settings
+        for var_name, setting_key in self.settings_map.items():
+            if hasattr(self, var_name) and hasattr(settings, setting_key):
+                val = getattr(settings, setting_key)
+
+                # Convert back to Tkinter friendly format if needed
+                if setting_key == "input_paths" and isinstance(val, list):
+                    val = "; ".join(val)
+
+                getattr(self, var_name).set(val)
+
+        # 2. Update Visuals (Sliders explicitly if needed, though set() usually handles it)
+        # self.col_slider.set(settings.num_columns) # Redundant if variable is bound, but safe
+        if hasattr(self, 'col_slider'):
+             self.col_slider.set(settings.num_columns)
+        if hasattr(self, 'row_slider'):
+             self.row_slider.set(settings.num_rows)
+
+        # 3. Re-render Grid using the state's thumbnail metadata
+        # We need to trigger the grid creation. We can reuse on_layout_change logic
+        # BUT we must force it to use the state's metadata, not generate new ones from pool if possible.
+        # However, on_layout_change is designed to slice the pool.
+        # If the user Undid a "Scrub" action, the pool logic in on_layout_change would OVERWRITE the scrubbed frame.
+        # So we must NOT call on_layout_change if we want to preserve specific frame changes.
+
+        # Instead, we directly call image_grid with the metadata from state.
+        # We need to extract the paths.
+        if state.thumbnail_metadata:
+            # Construct list of paths from metadata
+            # Note: metadata items are dicts with 'frame_path'
+            image_paths = [item.get('frame_path') for item in state.thumbnail_metadata]
+
+            import image_grid
+            grid_path = os.path.join(self.preview_temp_dir, "preview_restored.jpg")
+
+            try:
+                grid_success, layout = image_grid.create_image_grid(
+                    image_source_data=image_paths,
+                    output_path=grid_path,
+                    columns=settings.num_columns,
+                    background_color_hex=settings.background_color,
+                    padding=settings.padding,
+                    logger=logging.getLogger("restore")
+                )
+
+                # Crucial: Update layout data in state (or sync it)
+                # But wait, the layout data in state *should* be correct if we just undid.
+                # Re-running create_image_grid might produce slightly different coordinates if logic changed?
+                # Ideally we trust the create_image_grid to be deterministic.
+                # We update the layout data in the current state to match the newly generated grid.
+                self.thumbnail_layout_data = layout
+
+                if grid_success:
+                    self.preview_zoomable_canvas.set_image(grid_path)
+
+            except Exception as e:
+                print(f"Error restoring grid: {e}")
+
+        self._update_live_math()
+
+    @property
+    def thumbnail_metadata(self):
+        return self.state_manager.get_state().thumbnail_metadata
+
+    @thumbnail_metadata.setter
+    def thumbnail_metadata(self, value):
+        self.state_manager.get_state().thumbnail_metadata = value
+
+    @property
+    def cached_pool_metadata(self):
+        return self.state_manager.get_state().cached_pool_metadata
+
+    @cached_pool_metadata.setter
+    def cached_pool_metadata(self, value):
+        self.state_manager.get_state().cached_pool_metadata = value
+
+    @property
+    def thumbnail_layout_data(self):
+        return self.state_manager.get_state().thumbnail_layout_data
+
+    @thumbnail_layout_data.setter
+    def thumbnail_layout_data(self, value):
+        self.state_manager.get_state().thumbnail_layout_data = value
+
+    def _bind_settings_to_state(self):
+        for var_name, setting_key in self.settings_map.items():
+            if hasattr(self, var_name):
+                var = getattr(self, var_name)
+                # Use lambda with default args to capture current loop values
+                var.trace_add("write", lambda *args, v=var_name, s=setting_key: self._on_setting_change(v, s))
+
+    def _on_setting_change(self, var_name, setting_key):
+        try:
+            var = getattr(self, var_name)
+            val = var.get()
+
+            # Basic type handling based on variable type or explicit logic
+            # Since ProjectSettings expects specific types, we might need conversion.
+            # However, Tkinter vars often hold strings.
+            current_settings = self.state_manager.get_settings()
+
+            # Check target type on the settings object
+            if hasattr(current_settings, setting_key):
+                target_type = type(getattr(current_settings, setting_key))
+                if target_type is int:
+                    try:
+                        val = int(val) if val else 0
+                    except ValueError:
+                        val = 0
+                elif target_type is float:
+                    try:
+                        val = float(val) if val else 0.0
+                    except ValueError:
+                        val = 0.0
+                elif target_type is list:
+                    # Handle input_paths specially if it's a semicolon string
+                    if setting_key == "input_paths" and isinstance(val, str):
+                         val = [p.strip() for p in val.split(';') if p.strip()]
+
+            self.state_manager.update_settings({setting_key: val}, commit=False)
+        except Exception as e:
+            print(f"Error updating state from {var_name}: {e}")
 
     def _init_variables(self):
         self.default_settings = {
@@ -629,6 +784,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def on_layout_change(self, val):
         # Live update of the preview grid based on slider values
+
+        # SNAPSHOT: Capture state before destructive layout change
+        self.state_manager.snapshot()
+
         if not hasattr(self, 'cached_pool') or not self.cached_pool:
             return
 
@@ -1031,6 +1190,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             x1, y1 = thumb_info['x'], thumb_info['y']
             x2, y2 = x1 + thumb_info['width'], y1 + thumb_info['height']
             if x1 <= canvas_x <= x2 and y1 <= canvas_y <= y2:
+                # SNAPSHOT: Capture state before scrubbing starts (transaction start)
+                self.state_manager.snapshot()
+
                 self.queue.put(("log", f"Scrubbing initiated for thumbnail {i}."))
                 original_meta = self.thumbnail_metadata[i]
                 original_timestamp = original_meta.get('timestamp_sec', 0.0)
