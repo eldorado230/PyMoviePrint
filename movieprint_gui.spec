@@ -39,7 +39,7 @@ exe = EXE(
     a.zipfiles,
     a.datas,
     [],
-    name='MoviePrint',
+    name='PyMoviePrint',
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
@@ -57,7 +57,7 @@ exe = EXE(
 if sys.platform == 'darwin':
     app = BUNDLE(
         exe,
-        name='MoviePrint.app',
+        name='PyMoviePrint.app',
         icon=None,
         bundle_identifier='com.movieprint.gui',
     )
