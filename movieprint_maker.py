@@ -118,7 +118,7 @@ def _setup_temp_directory(video_file_path, settings, logger):
             return None, False, f"Error creating temporary directory: {e}"
 
 
-def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, logger):
+def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, logger, fast_preview=False):
     """Extracts frames from the video based on settings."""
     use_gpu = getattr(settings, 'use_gpu', False)
     if settings.extraction_mode == "interval":
@@ -128,6 +128,7 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
             output_format=settings.frame_format,
             start_time_sec=start_sec, end_time_sec=end_sec,
             use_gpu=use_gpu,
+            fast_preview=fast_preview,
             logger=logger
         )
     elif settings.extraction_mode == "shot":
@@ -352,7 +353,7 @@ def _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, pro
         logger.error(f"  Error saving metadata JSON to {json_path}: {e}")
 
 
-def process_single_video(video_file_path, settings, effective_output_filename, logger):
+def process_single_video(video_file_path, settings, effective_output_filename, logger, fast_preview=False):
     logger.info(f"\nProcessing video: {video_file_path}...")
 
     start_sec = parse_time_to_seconds(settings.start_time)
@@ -368,7 +369,7 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
         return False, error
 
     try:
-        extraction_ok, metadata_list = _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, logger)
+        extraction_ok, metadata_list = _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, logger, fast_preview=fast_preview)
         if not extraction_ok:
             return False, f"Frame extraction failed for {video_file_path}."
 
@@ -405,7 +406,7 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
             except Exception as e:
                 logger.error(f"  Error cleaning up temp directory {temp_dir}: {e}")
 
-def execute_movieprint_generation(settings, logger, progress_callback=None):
+def execute_movieprint_generation(settings, logger, progress_callback=None, fast_preview=False):
     logger.info("Starting PyMoviePrint generation process...")
 
     video_files_to_process = discover_video_files(
@@ -447,7 +448,7 @@ def execute_movieprint_generation(settings, logger, progress_callback=None):
             effective_output_name = f"{base}{settings.output_filename_suffix}.{output_print_format}"
 
         try:
-            success, message_or_path = process_single_video(video_path, settings, effective_output_name, logger)
+            success, message_or_path = process_single_video(video_path, settings, effective_output_name, logger, fast_preview=fast_preview)
             if success:
                 successful_ops.append({'video': video_path, 'output': message_or_path})
             else:
@@ -528,6 +529,8 @@ def main():
     common_group.add_argument("--use_gpu", action="store_true",
                               help="Try to use FFmpeg with NVDEC (cuda) for hardware accelerated frame extraction. \n"
                                    "Requires FFmpeg with CUDA support in system PATH.")
+    common_group.add_argument("--fast", "--draft", action="store_true", dest="fast_preview",
+                              help="Enable fast preview mode (uses keyframes only, less accurate timestamps).")
 
     args = parser.parse_args()
 
@@ -569,7 +572,8 @@ def main():
     successful_ops, failed_ops = execute_movieprint_generation(
         settings=args,
         logger=logger,
-        progress_callback=cli_progress_callback
+        progress_callback=cli_progress_callback,
+        fast_preview=args.fast_preview
     )
 
     logger.info("\n--- CLI Batch Processing Summary ---")
