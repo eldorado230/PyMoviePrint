@@ -332,6 +332,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.layout_mode_var = tk.StringVar(value="grid")
         self.num_columns_var = tk.StringVar(value="5")
         self.num_rows_var = tk.StringVar()
+        self.target_row_height_var = tk.StringVar(value="150")
         self.max_frames_for_print_var = tk.StringVar(value="100")
         self.max_frames_for_print_var.trace_add("write", self._handle_max_frames_change)
         self.padding_var = tk.StringVar(value="5")
@@ -446,10 +447,11 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.zoom_slider.pack(side="left", padx=5)
 
     def _create_cyber_slider_section(self, parent):
-        frame = ctk.CTkFrame(parent, fg_color="transparent")
-        frame.pack(fill="x", padx=10, pady=10)
+        self.slider_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.slider_frame.pack(fill="x", padx=10, pady=10)
 
         # Columns Slider
+        frame = self.slider_frame
         ctk.CTkLabel(frame, text="COLUMNS", font=("Roboto", 12, "bold"), text_color=COLOR_TEXT_MAIN).pack(anchor="w")
         self.col_slider = ctk.CTkSlider(frame, from_=1, to=20, number_of_steps=19, variable=None, command=self._on_col_slider_change, progress_color=COLOR_ACCENT_CYAN, button_color=COLOR_ACCENT_GLOW, button_hover_color="white")
         self.col_slider.set(5)
@@ -462,14 +464,52 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.row_slider.pack(fill="x", pady=(0, 15))
 
     def _populate_advanced_settings(self, parent):
+        # Extraction Mode
+        ctk.CTkLabel(parent, text="Extraction Mode:").pack(anchor="w", pady=(5, 0))
+        self.extraction_mode_seg = ctk.CTkSegmentedButton(parent, values=["interval", "shot"], variable=self.extraction_mode_var,
+                                                          selected_color=COLOR_ACCENT_CYAN, selected_hover_color=COLOR_BUTTON_HOVER,
+                                                          command=self._on_extraction_mode_change)
+        self.extraction_mode_seg.pack(fill="x", pady=(0, 5))
+
+        # Layout Mode
+        ctk.CTkLabel(parent, text="Layout Mode:").pack(anchor="w", pady=(5, 0))
+        self.layout_mode_seg = ctk.CTkSegmentedButton(parent, values=["grid", "timeline"], variable=self.layout_mode_var,
+                                                      selected_color=COLOR_ACCENT_CYAN, selected_hover_color=COLOR_BUTTON_HOVER,
+                                                      command=self._on_layout_mode_change)
+        self.layout_mode_seg.pack(fill="x", pady=(0, 5))
+
+        # Shot Threshold (initially hidden or shown based on extraction)
+        self.shot_threshold_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.shot_threshold_frame.pack(fill="x", pady=5)
+        self.shot_threshold_label = ctk.CTkLabel(self.shot_threshold_frame, text="Shot Threshold:")
+        self.shot_threshold_label.pack(side="left")
+        self.shot_threshold_entry = ctk.CTkEntry(self.shot_threshold_frame, textvariable=self.shot_threshold_var, width=60)
+        self.shot_threshold_entry.pack(side="left", padx=5)
+
+        # Target Row Height (for Timeline)
+        self.row_height_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.row_height_frame.pack(fill="x", pady=5)
+        self.row_height_label = ctk.CTkLabel(self.row_height_frame, text="Target Row Height:")
+        self.row_height_label.pack(side="left")
+        self.row_height_entry = ctk.CTkEntry(self.row_height_frame, textvariable=self.target_row_height_var, width=60)
+        self.row_height_entry.pack(side="left", padx=5)
+
         ctk.CTkLabel(parent, text="Output Directory:").pack(anchor="w")
         ctk.CTkEntry(parent, textvariable=self.output_dir_var).pack(fill="x", pady=5)
         ctk.CTkButton(parent, text="Select Output", command=self.browse_output_dir, fg_color=COLOR_BG_SECONDARY, border_width=1, border_color=COLOR_ACCENT_CYAN).pack(fill="x", pady=5)
 
-        # Disabled Timeline/Layout choices here to prevent confusion as we now enforce Grid + Rows/Cols
+        # Switches & Checks
+        ctk.CTkSwitch(parent, text="Show Frame Info/Timecode", variable=self.frame_info_show_var, progress_color=COLOR_ACCENT_CYAN).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(parent, text="Detect Faces", variable=self.detect_faces_var, fg_color=COLOR_ACCENT_CYAN, hover_color=COLOR_BUTTON_HOVER).pack(anchor="w", pady=2)
 
         ctk.CTkCheckBox(parent, text="Show Header", variable=self.show_header_var, fg_color=COLOR_ACCENT_CYAN, hover_color=COLOR_BUTTON_HOVER).pack(anchor="w", pady=2)
         ctk.CTkCheckBox(parent, text="Show Timecode", variable=self.show_timecode_var, fg_color=COLOR_ACCENT_CYAN, hover_color=COLOR_BUTTON_HOVER).pack(anchor="w", pady=2)
+
+        # Rotation
+        ctk.CTkLabel(parent, text="Rotate Thumbnails:").pack(anchor="w", pady=(10, 0))
+        self.rotate_seg = ctk.CTkSegmentedButton(parent, values=["0", "90", "180", "270"], variable=self.rotate_thumbnails_var,
+                                                 selected_color=COLOR_ACCENT_CYAN, selected_hover_color=COLOR_BUTTON_HOVER)
+        self.rotate_seg.pack(fill="x", pady=5)
 
         ctk.CTkLabel(parent, text="Background Color:").pack(anchor="w", pady=(10,0))
         ctk.CTkEntry(parent, textvariable=self.background_color_var).pack(fill="x", pady=5)
@@ -477,6 +517,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         ctk.CTkLabel(parent, text="Preview Quality:").pack(anchor="w", pady=(10,0))
         ctk.CTkSlider(parent, from_=10, to=100, variable=self.preview_quality_var).pack(fill="x")
+
+        # Initialize visibility state
+        self.update_visibility_state()
 
     def _create_action_footer(self, parent):
         parent.grid_columnconfigure(0, weight=1)
@@ -505,6 +548,41 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def _on_row_slider_change(self, value):
         self.num_rows_var.set(int(value))
         self.on_layout_change(value)
+        self._update_live_math()
+
+    def _on_extraction_mode_change(self, value):
+        # If user selects Interval while in Timeline, force Grid
+        if value == "interval" and self.layout_mode_var.get() == "timeline":
+            self.layout_mode_var.set("grid")
+            self.queue.put(("log", "Interval extraction requires Grid layout. Switched."))
+        self.update_visibility_state()
+
+    def _on_layout_mode_change(self, value):
+        # If user selects Timeline while in Interval, force Shot
+        if value == "timeline" and self.extraction_mode_var.get() == "interval":
+            self.extraction_mode_var.set("shot")
+            self.queue.put(("log", "Timeline layout requires Shot extraction. Switched."))
+        self.update_visibility_state()
+
+    def update_visibility_state(self, *args):
+        layout = self.layout_mode_var.get()
+        extraction = self.extraction_mode_var.get()
+
+        # Visibility Update
+        if layout == "grid":
+            # Position after input frame is roughly correct
+            self.slider_frame.pack(fill="x", padx=10, pady=10, after=self.input_entry.master)
+            self.row_height_frame.pack_forget()
+        else:
+            self.slider_frame.pack_forget()
+            self.row_height_frame.pack(fill="x", pady=5, after=self.layout_mode_seg)
+
+        if extraction == "shot":
+            self.shot_threshold_frame.pack(fill="x", pady=5, after=self.layout_mode_seg)
+        else:
+            self.shot_threshold_frame.pack_forget()
+
+        # Re-trigger live math or other updates if needed
         self._update_live_math()
 
     def _update_live_math(self, *args):
@@ -808,33 +886,45 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         settings.layout_mode = self.layout_mode_var.get()
 
         try:
-            # Force Grid layout and use new Rows/Cols logic
-            settings.layout_mode = "grid"
+            # Map settings from GUI variables
+            settings.layout_mode = self.layout_mode_var.get()
+            settings.extraction_mode = self.extraction_mode_var.get()
+            settings.shot_threshold = float(self.shot_threshold_var.get())
+            settings.frame_info_show = self.frame_info_show_var.get()
+            settings.detect_faces = self.detect_faces_var.get()
+            settings.rotate_thumbnails = int(self.rotate_thumbnails_var.get())
 
-            rows = int(self.num_rows_var.get() or 5)
-            cols = int(self.num_columns_var.get() or 5)
-            total_target = rows * cols
+            # Layout specific logic
+            if settings.layout_mode == "grid":
+                rows = int(self.num_rows_var.get() or 5)
+                cols = int(self.num_columns_var.get() or 5)
+                total_target = rows * cols
+                settings.rows = rows
+                settings.columns = cols
+                settings.max_frames_for_print = total_target
+                settings.target_row_height = None
 
-            settings.rows = rows
-            settings.columns = cols
-            settings.max_frames_for_print = total_target
-
-            # Calculate interval based on duration (Overshoot strategy)
-            video_path = self._internal_input_paths[0]
-            duration = self._get_video_duration_sync(video_path)
-            if duration:
-                settings.interval_seconds = duration / (total_target * 1.1)
+                # Interval Calculation (Overshoot strategy) for Interval mode
+                if settings.extraction_mode == "interval":
+                    video_path = self._internal_input_paths[0]
+                    duration = self._get_video_duration_sync(video_path)
+                    if duration:
+                        settings.interval_seconds = duration / (total_target * 1.1)
+                    else:
+                        settings.interval_seconds = 1.0
             else:
-                # Fallback if duration unknown
-                settings.interval_seconds = 1.0
+                # Timeline Mode Defaults
+                settings.rows = None
+                settings.columns = None
+                settings.max_frames_for_print = None
+                settings.target_row_height = int(self.target_row_height_var.get() or 150)
+                settings.interval_seconds = None # Not used in shot mode
 
-            # ... basic settings for brevity, assuming defaults/simple logic ...
+            # Common settings
             settings.padding = int(self.padding_var.get())
             settings.background_color = self.background_color_var.get()
             settings.frame_format = "jpg"
             settings.save_metadata_json = True
-            settings.detect_faces = False
-            settings.rotate_thumbnails = 0
             settings.start_time = None
             settings.end_time = None
             settings.exclude_frames = None
@@ -851,13 +941,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             settings.show_timecode = self.show_timecode_var.get()
             settings.show_frame_num = self.show_frame_num_var.get()
             settings.rounded_corners = 0
-            settings.frame_info_show = False # Simplified
             settings.max_output_filesize_kb = None
             
-            # Add missing required fields with None
+            # Add missing required fields with None or Defaults
             settings.interval_frames = None
-            settings.shot_threshold = 27.0
-            settings.target_row_height = 150
             settings.output_image_width = 1920
             settings.target_thumbnail_width = None
             settings.output_width = None
