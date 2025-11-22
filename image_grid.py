@@ -387,9 +387,14 @@ def create_image_grid(
         if (columns is None or columns <= 0) and (rows is None or rows <= 0):
             logger.error("For grid mode, either 'columns' or 'rows' must be a positive integer.")
             return False, thumbnail_layout_data
-        if rows is not None and rows > 0:
+
+        # If explicit columns are not provided (or invalid), but rows are provided,
+        # calculate columns based on rows.
+        # This prioritizes explicit 'columns' if both are present (fixing GUI slider bug).
+        if (columns is None or columns <= 0) and (rows is not None and rows > 0):
             num_imgs = len(image_source_data)
             columns = max(1, math.ceil(num_imgs / rows))
+
         if target_thumbnail_width is not None and not (isinstance(target_thumbnail_width, int) and target_thumbnail_width > 0):
             logger.error("For grid mode, if target_thumbnail_width is provided, it must be a positive integer."); return False, thumbnail_layout_data
         if not all(isinstance(p, str) for p in image_source_data):
