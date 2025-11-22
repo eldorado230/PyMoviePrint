@@ -1,8 +1,12 @@
 import customtkinter as ctk
 import tkinter as tk
 import logging
+from logging.handlers import RotatingFileHandler
 from tkinter import ttk, filedialog, scrolledtext, messagebox, colorchooser
 import os
+import sys
+import platform
+import shutil
 import argparse
 import threading
 import queue
@@ -34,6 +38,51 @@ COLOR_ACCENT_GLOW = "#00FFFF"  # Bright Cyan for glows/highlights
 COLOR_TEXT_MAIN = "#FFFFFF"
 COLOR_TEXT_MUTED = "#888888"
 COLOR_BUTTON_HOVER = "#00CED1" # Slightly lighter cyan
+
+def setup_file_logging():
+    # 1. Define Path
+    log_dir = os.path.expanduser(os.path.join("~", ".pymovieprint", "logs"))
+    try:
+        os.makedirs(log_dir, exist_ok=True)
+    except Exception as e:
+        print(f"Failed to create log directory: {e}")
+        return None
+
+    log_file = os.path.join(log_dir, "pymovieprint.log")
+
+    # 2. Configure Rotator (5MB limit, keep 3 backups)
+    try:
+        handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
+    except Exception as e:
+        print(f"Failed to setup file logging handler: {e}")
+        return None
+
+    # 3. Formatter (Include time, level, and message)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    handler.setFormatter(formatter)
+
+    # 4. Add to Root Logger
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.INFO) # Capture INFO and above
+    root_logger.addHandler(handler)
+
+    # 5. Log Startup Block
+    logging.info("="*50)
+    logging.info(f"SESSION START - PyMoviePrint v{__version__}")
+    logging.info(f"Platform: {platform.system()} {platform.release()}")
+    logging.info(f"Python: {sys.version}")
+    logging.info("="*50)
+
+    # Handle unhandled exceptions
+    def handle_exception(exc_type, exc_value, exc_traceback):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc_value, exc_traceback)
+            return
+        logging.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
+
+    sys.excepthook = handle_exception
+
+    return log_file
 
 class QueueHandler(logging.Handler):
     def __init__(self, queue_instance):
@@ -286,6 +335,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._init_variables()
         self._bind_settings_to_state()
         self._load_persistent_settings()
+
+        # Log startup settings
+        self._log_startup_settings()
 
         # Layout
         self.grid_columnconfigure(1, weight=1)
@@ -897,6 +949,27 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 json.dump(settings, f, indent=4)
         except: pass
 
+    def _log_startup_settings(self):
+        try:
+            ffmpeg_path = shutil.which('ffmpeg')
+            logging.info(f"FFmpeg Available: {'Yes' if ffmpeg_path else 'No'} (Path: {ffmpeg_path})")
+            logging.info(f"FFmpeg GPU Support (Detected): {self.use_gpu_var.get()}")
+
+            current_settings = {
+                "Input Paths": self.input_paths_var.get(),
+                "Output Dir": self.output_dir_var.get(),
+                "Layout Mode": self.layout_mode_var.get(),
+                "Columns": self.num_columns_var.get(),
+                "Rows": self.num_rows_var.get(),
+                "Interval": self.interval_seconds_var.get(),
+                "Use GPU (Setting)": self.use_gpu_var.get(),
+                "Extraction Mode": self.extraction_mode_var.get(),
+                "Max Frames": self.max_frames_for_print_var.get()
+            }
+            logging.info(f"Initial Settings: {json.dumps(current_settings, indent=4)}")
+        except Exception as e:
+            logging.error(f"Error logging startup settings: {e}")
+
     def check_queue(self):
         try:
             while True:
@@ -1285,5 +1358,6 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             if new_thumb_img: new_thumb_img.close()
 
 if __name__ == "__main__":
+    setup_file_logging()
     app = MoviePrintApp()
     app.mainloop()
