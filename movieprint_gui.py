@@ -321,6 +321,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             "frame_info_show_var": True, "frame_info_timecode_or_frame_var": "timecode",
             "frame_info_font_color_var": "#FFFFFF", "frame_info_bg_color_var": "#000000",
             "frame_info_position_var": "bottom_left", "frame_info_size_var": "10", "frame_info_margin_var": "5",
+            "use_gpu_var": False
         }
 
         self.input_paths_var = tk.StringVar()
@@ -339,6 +340,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.background_color_var = tk.StringVar(value="#1e1e1e")
         self.preview_quality_var = tk.IntVar(value=75)
         self.zoom_level_var = tk.DoubleVar(value=1.0)
+        self.use_gpu_var = tk.BooleanVar(value=False)
 
         # Other vars initialized on demand or just use defaults if not bound to main UI frequently
         for k, v in self.default_settings.items():
@@ -501,6 +503,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         # Switches & Checks
         ctk.CTkSwitch(parent, text="Show Frame Info/Timecode", variable=self.frame_info_show_var, progress_color=COLOR_ACCENT_CYAN).pack(anchor="w", pady=5)
         ctk.CTkCheckBox(parent, text="Detect Faces", variable=self.detect_faces_var, fg_color=COLOR_ACCENT_CYAN, hover_color=COLOR_BUTTON_HOVER).pack(anchor="w", pady=2)
+        ctk.CTkCheckBox(parent, text="Use GPU (FFmpeg)", variable=self.use_gpu_var, fg_color=COLOR_ACCENT_CYAN, hover_color=COLOR_BUTTON_HOVER).pack(anchor="w", pady=2)
 
         ctk.CTkCheckBox(parent, text="Show Header", variable=self.show_header_var, fg_color=COLOR_ACCENT_CYAN, hover_color=COLOR_BUTTON_HOVER).pack(anchor="w", pady=2)
         ctk.CTkCheckBox(parent, text="Show Timecode", variable=self.show_timecode_var, fg_color=COLOR_ACCENT_CYAN, hover_color=COLOR_BUTTON_HOVER).pack(anchor="w", pady=2)
@@ -942,6 +945,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             settings.show_frame_num = self.show_frame_num_var.get()
             settings.rounded_corners = 0
             settings.max_output_filesize_kb = None
+            settings.use_gpu = self.use_gpu_var.get()
             
             # Add missing required fields with None or Defaults
             settings.interval_frames = None
@@ -1040,7 +1044,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         # Simple direct extraction
         thread_logger = logging.getLogger(f"scrub_{threading.get_ident()}")
         try:
-            success = video_processing.extract_specific_frame(video_path, timestamp, output_path, thread_logger)
+            success = video_processing.extract_specific_frame(video_path, timestamp, output_path, thread_logger, use_gpu=self.use_gpu_var.get())
             if success:
                 with Image.open(output_path) as img:
                     self.queue.put(("update_thumbnail", {"index": thumb_index, "image": img.copy()}))

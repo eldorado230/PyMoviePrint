@@ -2,14 +2,147 @@ import cv2
 import logging
 import os
 import shutil
+import subprocess
+import re
+import glob
 
 # Imports for PySceneDetect
 from scenedetect import open_video, SceneManager, FrameTimecode # Ensure FrameTimecode is imported
 from scenedetect.detectors import ContentDetector
 
+def check_ffmpeg_gpu(logger):
+    """Checks if ffmpeg is installed and supports CUDA."""
+    if not shutil.which('ffmpeg'):
+        logger.warning("FFmpeg not found in PATH. GPU acceleration unavailable.")
+        return False
+    try:
+        result = subprocess.run(['ffmpeg', '-hwaccels'], capture_output=True, text=True)
+        if 'cuda' in result.stdout:
+            logger.info("FFmpeg supports CUDA (NVDEC) hardware acceleration.")
+            return True
+        else:
+            logger.warning("FFmpeg found but 'cuda' not listed in -hwaccels. GPU acceleration unavailable.")
+            return False
+    except Exception as e:
+        logger.warning(f"Error checking FFmpeg capabilities: {e}")
+        return False
+
+def extract_frames_ffmpeg(video_path, output_folder, logger,
+                          interval_seconds=None, interval_frames=None, output_format="jpg",
+                          start_time_sec=None, end_time_sec=None):
+    """
+    Extracts frames using FFmpeg with NVDEC GPU acceleration.
+    """
+    extracted_frame_info = []
+    video_filename = os.path.basename(video_path)
+
+    # Retrieve basic video info (fps, duration) using OpenCV just for metadata calculation
+    # (Using ffprobe would be cleaner but requires parsing JSON/output, OpenCV is already here)
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        logger.error(f"Could not open video {video_path} to read metadata."); return False, extracted_frame_info
+    fps = cap.get(cv2.CAP_PROP_FPS)
+    total_video_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
+    cap.release()
+
+    if fps <= 0:
+        logger.error("Could not determine FPS. Cannot use FFmpeg extraction reliably."); return False, extracted_frame_info
+
+    start_time = start_time_sec if start_time_sec is not None else 0.0
+    duration_cmd = []
+    if end_time_sec is not None:
+        duration_val = end_time_sec - start_time
+        if duration_val > 0:
+            duration_cmd = ['-t', str(duration_val)]
+
+    # Construct filter
+    vf_filter = ""
+    if interval_seconds:
+        vf_filter = f"fps=1/{interval_seconds}"
+    elif interval_frames:
+        # select='not(mod(n,interval))'
+        vf_filter = f"select='not(mod(n,{interval_frames}))',vsync=vfr"
+
+    output_pattern = os.path.join(output_folder, "ffmpeg_out_%05d." + output_format)
+
+    cmd = [
+        'ffmpeg',
+        '-hwaccel', 'cuda',
+        '-ss', str(start_time),
+        '-i', video_path
+    ] + duration_cmd + [
+        '-vf', vf_filter,
+        '-frame_pts', '1', # helpful for debugging timing if needed, though simple output numbering is used here
+        '-q:v', '2', # High quality for jpeg
+        output_pattern,
+        '-y', '-hide_banner', '-loglevel', 'error'
+    ]
+
+    logger.info(f"Running FFmpeg command: {' '.join(cmd)}")
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+    except subprocess.CalledProcessError as e:
+        logger.error(f"FFmpeg execution failed: {e.stderr.decode()}")
+        return False, extracted_frame_info
+
+    # Post-process: Rename files and build metadata
+    # FFmpeg outputs sequential numbers: ffmpeg_out_00001.jpg, 00002.jpg...
+    # We need to map these to estimated timestamps/frame numbers.
+    generated_files = sorted(glob.glob(os.path.join(output_folder, f"ffmpeg_out_*.{output_format}")))
+
+    for i, file_path in enumerate(generated_files):
+        # Estimate time/frame
+        # Time ~= start + i * interval
+        # Frame ~= Time * FPS
+        if interval_seconds:
+            est_time = start_time + (i * interval_seconds)
+            est_frame = int(est_time * fps)
+        else: # interval_frames
+            est_frame = int(start_time * fps) + (i * interval_frames)
+            est_time = est_frame / fps
+
+        # Rename to standard format expected by the rest of the app
+        # "frame_{count:05d}_absFN{frame_number}.{ext}"
+        final_filename = f"frame_{i:05d}_absFN{est_frame}.{output_format}"
+        final_path = os.path.join(output_folder, final_filename)
+
+        try:
+            os.rename(file_path, final_path)
+            extracted_frame_info.append({
+                'frame_path': final_path,
+                'frame_number': est_frame,
+                'timestamp_sec': round(est_time, 3),
+                'video_filename': video_filename
+            })
+        except OSError as e:
+            logger.warning(f"Could not rename {file_path} to {final_path}: {e}")
+
+    logger.info(f"FFmpeg GPU extraction complete. Saved {len(extracted_frame_info)} frames.")
+    return True, extracted_frame_info
+
+def extract_specific_frame_ffmpeg(video_path, timestamp_sec, output_path, logger):
+    """Extracts a single frame using FFmpeg GPU acceleration."""
+    cmd = [
+        'ffmpeg',
+        '-hwaccel', 'cuda',
+        '-ss', str(timestamp_sec),
+        '-i', video_path,
+        '-frames:v', '1',
+        '-q:v', '2',
+        output_path,
+        '-y', '-hide_banner', '-loglevel', 'error'
+    ]
+    try:
+        subprocess.run(cmd, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        if os.path.exists(output_path):
+            return True
+    except subprocess.CalledProcessError as e:
+        logger.error(f"FFmpeg scrub failed: {e.stderr.decode()}")
+    return False
+
 def extract_frames(video_path, output_folder, logger,
                    interval_seconds=None, interval_frames=None, output_format="jpg",
-                   start_time_sec=None, end_time_sec=None):
+                   start_time_sec=None, end_time_sec=None, use_gpu=False):
     """
     Extracts frames from a video file based on time or frame intervals within a specified time segment.
 
@@ -21,6 +154,7 @@ def extract_frames(video_path, output_folder, logger,
         output_format (str, optional): Output image format. Defaults to "jpg".
         start_time_sec (float, optional): Start time in seconds to begin extraction.
         end_time_sec (float, optional): End time in seconds to stop extraction.
+        use_gpu (bool, optional): Try to use FFmpeg with NVDEC if True.
 
     Returns:
         tuple: (bool, list) - Success status and list of extracted frame metadata.
@@ -39,6 +173,18 @@ def extract_frames(video_path, output_folder, logger,
     if not os.path.exists(output_folder):
         try: os.makedirs(output_folder)
         except OSError as e: logger.error(f"Error creating output folder {output_folder}: {e}"); return False, extracted_frame_info
+
+    # Try GPU path if requested
+    if use_gpu:
+        if check_ffmpeg_gpu(logger):
+            logger.info("Using FFmpeg GPU acceleration for frame extraction.")
+            return extract_frames_ffmpeg(
+                video_path, output_folder, logger,
+                interval_seconds, interval_frames, output_format,
+                start_time_sec, end_time_sec
+            )
+        else:
+            logger.info("GPU acceleration unavailable or failed check. Falling back to OpenCV CPU.")
 
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
@@ -243,7 +389,7 @@ def extract_shot_boundary_frames(video_path, output_folder, logger, output_forma
         if cap_cv: cap_cv.release()
         # video_manager is closed by PySceneDetect automatically or by its context manager if used.
 
-def extract_specific_frame(video_path, timestamp_sec, output_path, logger):
+def extract_specific_frame(video_path, timestamp_sec, output_path, logger, use_gpu=False):
     """
     Extracts a single specific frame from a video file at a given timestamp.
 
@@ -252,10 +398,22 @@ def extract_specific_frame(video_path, timestamp_sec, output_path, logger):
         timestamp_sec (float): The timestamp in seconds for the frame to extract.
         output_path (str): The full path where the extracted frame will be saved.
         logger (logging.Logger): Logger instance.
+        use_gpu (bool): If True, try to use FFmpeg GPU extraction.
 
     Returns:
         bool: True if the frame was extracted successfully, False otherwise.
     """
+    if use_gpu:
+        # Simple check without full subprocess overhead every time (optimistically try)
+        # Or rely on GUI to only pass True if verified.
+        # We'll assume if passed True, we try it.
+        if extract_specific_frame_ffmpeg(video_path, timestamp_sec, output_path, logger):
+            return True
+        # Fallback handled by proceeding to OpenCV code if return False isn't here?
+        # Actually extract_specific_frame_ffmpeg returns False on failure.
+        # We can fallback.
+        logger.warning("FFmpeg GPU scrub failed. Falling back to CPU.")
+
     if not os.path.exists(video_path):
         logger.error(f"Video file not found: {video_path}")
         return False

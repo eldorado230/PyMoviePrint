@@ -120,12 +120,14 @@ def _setup_temp_directory(video_file_path, settings, logger):
 
 def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, logger):
     """Extracts frames from the video based on settings."""
+    use_gpu = getattr(settings, 'use_gpu', False)
     if settings.extraction_mode == "interval":
         return video_processing.extract_frames(
             video_path=video_file_path, output_folder=temp_dir,
             interval_seconds=settings.interval_seconds, interval_frames=settings.interval_frames,
             output_format=settings.frame_format,
             start_time_sec=start_sec, end_time_sec=end_sec,
+            use_gpu=use_gpu,
             logger=logger
         )
     elif settings.extraction_mode == "shot":
@@ -523,6 +525,9 @@ def main():
                               help="Rotate all thumbnails by 0, 90, 180, or 270 degrees clockwise (default: 0).")
     common_group.add_argument("--max_output_filesize_kb", type=int, default=None,
                               help="Attempt to limit final MoviePrint file size to this value in kilobytes.")
+    common_group.add_argument("--use_gpu", action="store_true",
+                              help="Try to use FFmpeg with NVDEC (cuda) for hardware accelerated frame extraction. \n"
+                                   "Requires FFmpeg with CUDA support in system PATH.")
 
     args = parser.parse_args()
 
