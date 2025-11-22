@@ -56,12 +56,18 @@ def extract_frames_ffmpeg(video_path, output_folder, logger,
             duration_cmd = ['-t', str(duration_val)]
 
     # Construct filter
-    vf_filter = ""
+    filters = []
     if interval_seconds:
-        vf_filter = f"fps=1/{interval_seconds}"
+        filters.append(f"fps=1/{interval_seconds}")
     elif interval_frames:
         # select='not(mod(n,interval))'
-        vf_filter = f"select='not(mod(n,{interval_frames}))',vsync=vfr"
+        filters.append(f"select='not(mod(n,{interval_frames}))',vsync=vfr")
+
+    if fast_preview:
+        filters.append("scale=480:-1")
+
+    vf_filter = ",".join(filters)
+    q_scale = '5' if fast_preview else '2'
 
     output_pattern = os.path.join(output_folder, "ffmpeg_out_%05d." + output_format)
 
@@ -80,7 +86,7 @@ def extract_frames_ffmpeg(video_path, output_folder, logger,
     cmd += duration_cmd + [
         '-vf', vf_filter,
         '-frame_pts', '1', # helpful for debugging timing if needed, though simple output numbering is used here
-        '-q:v', '2', # High quality for jpeg
+        '-q:v', q_scale,
         output_pattern,
         '-y', '-hide_banner', '-loglevel', 'error'
     ]
