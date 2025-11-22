@@ -224,7 +224,7 @@ def _create_fixed_column_grid(image_objects_with_paths, output_path, columns, pa
     try:
         if output_width and output_height:
             logger.info(f"Resizing final grid to user-defined dimensions: {output_width}x{output_height}")
-            grid_image = grid_image.resize((output_width, output_height), Image.Resampling.LANCZOS)
+            grid_image = grid_image.resize((output_width, output_height), Image.Resampling.BICUBIC)
 
         grid_image.save(output_path)
         logger.info(f"Fixed-column grid saved to {output_path}")
@@ -332,7 +332,7 @@ def _create_timeline_view_grid(image_objects_with_paths_ratios, output_path,
                 logger.warning(f"Warning: Calculated width for image {item_info['original_path']} is <=0. Skipping.")
                 continue
 
-            final_img_for_cell = img_scaled_to_row_h.resize((final_thumb_width, final_thumb_height), Image.Resampling.LANCZOS)
+            final_img_for_cell = img_scaled_to_row_h.resize((final_thumb_width, final_thumb_height), Image.Resampling.BICUBIC)
             grid_image.paste(final_img_for_cell, (current_x, y_pos))
             thumbnail_layout_data.append({
                 'image_path': item_info['original_path'], 'x': current_x, 'y': y_pos,
