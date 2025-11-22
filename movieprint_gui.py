@@ -1040,7 +1040,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             interval = duration / 400.0
             if interval < 0.1: interval = 0.1
 
-            success, meta = video_processing.extract_frames(video_path, temp_dir, thread_logger, interval_seconds=interval)
+            success, meta = video_processing.extract_frames(video_path, temp_dir, thread_logger, interval_seconds=interval, fast_preview=True)
             
             if success:
                 self.cached_pool_metadata = meta
