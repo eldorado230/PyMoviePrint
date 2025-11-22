@@ -126,6 +126,11 @@ class ZoomableCanvas(ctk.CTkFrame):
         self.canvas.bind("<Button-4>", self.on_mouse_wheel)
         self.canvas.bind("<Button-5>", self.on_mouse_wheel)
 
+        # Allow dropping files directly onto the preview canvas
+        # We access the main app's handle_drop via app_ref
+        self.canvas.drop_target_register(DND_FILES)
+        self.canvas.dnd_bind('<<Drop>>', self.app_ref.handle_drop)
+
     def on_button_press(self, event):
         if self.app_ref.is_scrubbing_active():
             self.app_ref.stop_scrubbing(event)
@@ -340,7 +345,21 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.background_color_var = tk.StringVar(value="#1e1e1e")
         self.preview_quality_var = tk.IntVar(value=75)
         self.zoom_level_var = tk.DoubleVar(value=1.0)
-        self.use_gpu_var = tk.BooleanVar(value=False)
+
+        # 1. Create a temporary logger for the check
+        startup_logger = logging.getLogger("startup_check")
+        startup_logger.addHandler(logging.NullHandler())
+
+        # 2. Run the check
+        gpu_detected = False
+        try:
+            # Check if ffmpeg supports cuda
+            gpu_detected = video_processing.check_ffmpeg_gpu(startup_logger)
+        except Exception:
+            pass
+
+        # 3. Initialize the variable with the result
+        self.use_gpu_var = tk.BooleanVar(value=gpu_detected)
 
         # Other vars initialized on demand or just use defaults if not bound to main UI frequently
         for k, v in self.default_settings.items():
@@ -376,6 +395,14 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             ctk.CTkLabel(f, text=num, font=("Roboto", 40, "bold"), text_color=COLOR_ACCENT_CYAN).pack()
             ctk.CTkLabel(f, text=title, font=("Roboto", 16, "bold"), text_color=COLOR_TEXT_MAIN).pack()
             ctk.CTkLabel(f, text=desc, font=("Roboto", 12), text_color=COLOR_TEXT_MUTED).pack()
+
+        # Register the landing frame as a drop target
+        parent.drop_target_register(DND_FILES)
+        parent.dnd_bind('<<Drop>>', self.handle_drop)
+
+        # Also register the hero canvas so dropping on the "bricks" works
+        self.hero_canvas.drop_target_register(DND_FILES)
+        self.hero_canvas.dnd_bind('<<Drop>>', self.handle_drop)
 
     def _draw_masonry_placeholder(self):
         # Simple drawing to simulate the masonry look
@@ -688,6 +715,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
                     self.interval_seconds_var.set(settings.get("interval_seconds", "5.0"))
 
+                    if "use_gpu" in settings:
+                        self.use_gpu_var.set(settings["use_gpu"])
+
         except Exception as e:
             print(f"Error loading settings: {e}")
 
@@ -698,6 +728,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             "num_columns": self.num_columns_var.get(),
             "max_frames_for_print": self.max_frames_for_print_var.get(),
             "interval_seconds": self.interval_seconds_var.get(),
+            "use_gpu": self.use_gpu_var.get(),
             # ... add others as needed
         }
         try:
