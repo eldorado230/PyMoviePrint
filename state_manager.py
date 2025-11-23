@@ -52,20 +52,55 @@ class ProjectSettings:
     """
     input_paths: List[str] = field(default_factory=list)
     output_dir: str = ""
+    
+    # Extraction
     extraction_mode: str = "interval"  # 'interval', 'shot'
     interval_seconds: float = 5.0
+    interval_frames: Optional[int] = None
+    shot_threshold: float = 27.0
+    
+    # Layout
     layout_mode: str = "grid"          # 'grid', 'timeline'
     num_columns: int = 5
     num_rows: int = 5
+    target_row_height: int = 150
+    
+    # Processing
     use_gpu: bool = False
-    background_color: str = "#000000"
-    padding: int = 0
+    detect_faces: bool = False
+    
+    # Styling
+    background_color: str = "#1e1e1e"
+    padding: int = 5
     grid_margin: int = 0
-    # Add other settings as needed
+    rounded_corners: int = 0
+    rotate_thumbnails: int = 0
+    
+    # Overlay Info
+    show_header: bool = True
+    show_file_path: bool = True
+    show_timecode: bool = True
+    show_frame_num: bool = True
+    frame_info_show: bool = False
+    frame_info_timecode_or_frame: str = "timecode"
+    frame_info_font_color: str = "#FFFFFF"
+    frame_info_bg_color: str = "#000000"
+    frame_info_position: str = "bottom_left"
+    frame_info_size: int = 10
+    frame_info_margin: int = 5
+    
+    # Output
+    frame_format: str = "jpg"
+    preview_quality: int = 75
+    output_quality: int = 95
+    max_frames_for_print: int = 100
+    output_filename_suffix: str = "-thumb"
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> 'ProjectSettings':
-        return cls(**{k: v for k, v in data.items() if k in cls.__annotations__})
+        # Safely ignore keys in the dict that aren't in the dataclass
+        valid_keys = {k: v for k, v in data.items() if k in cls.__annotations__}
+        return cls(**valid_keys)
 
 @dataclass
 class ProjectState:
