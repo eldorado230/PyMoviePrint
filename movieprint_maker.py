@@ -137,6 +137,18 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
     UPDATED: Now prefers 'Timestamp' extraction for Grids to match GUI preview logic.
     """
     
+    # --- NEW FIX: Check for Manual Timestamps (from Scrubbing) ---
+    if hasattr(settings, 'manual_timestamps') and settings.manual_timestamps:
+        logger.info(f"  Using {len(settings.manual_timestamps)} manual timestamps provided by GUI (Scrubbing).")
+        return video_processing.extract_frames_from_timestamps(
+            video_path=video_file_path, 
+            timestamps=settings.manual_timestamps, 
+            output_folder=temp_dir, 
+            logger=logger, 
+            output_format=settings.frame_format,
+            fast_preview=fast_preview
+        )
+
     # NEW LOGIC: If it's a Grid, calculate timestamps directly (MoviePrint v004 style)
     # This bypasses the old "Interval" logic to ensure we get exactly Rows*Cols frames
     if settings.layout_mode == "grid" and getattr(settings, 'columns', None) and getattr(settings, 'rows', None):
@@ -471,13 +483,18 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
 
     is_single_file_direct_input = len(settings.input_paths) == 1 and os.path.isfile(settings.input_paths[0])
 
-    output_print_format = "png"
+    # --- LOGIC FIX START ---
+    # Default to user setting, or 'jpg' if setting is missing/invalid
+    output_print_format = "jpg"
+    if hasattr(settings, 'frame_format') and settings.frame_format.lower() in ['jpg', 'png']:
+        output_print_format = settings.frame_format.lower()
+
+    # If the user specifically typed a filename with an extension, respect that
     if is_single_file_direct_input and settings.output_filename:
         _, ext = os.path.splitext(settings.output_filename)
         if ext.lower() in ['.png', '.jpg', '.jpeg']:
             output_print_format = ext.lower().replace('.', '').replace('jpeg','jpg')
-        elif settings.frame_format.lower() in ['jpg', 'png']:
-            output_print_format = settings.frame_format.lower()
+    # --- LOGIC FIX END ---
 
     total_videos = len(video_files_to_process)
     for i, video_path in enumerate(video_files_to_process):
