@@ -152,6 +152,14 @@ def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger
     current_y = config.grid_margin + header_height
     info_font = _load_font(config.font_settings.get_font_path(), config.font_settings.size)
 
+    # --- Pre-calculate Radius Scale ---
+    # The preview in GUI uses ~480px width images. 
+    # If we are processing full-res (e.g. 1920px), we must scale the radius 
+    # so the roundness looks the same as it did in the preview window.
+    radius_scale_factor = 1.0
+    if cell_w > 0:
+        radius_scale_factor = cell_w / 480.0
+
     for i, path in enumerate(image_paths):
         try:
             with Image.open(path) as img:
@@ -162,9 +170,11 @@ def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger
                 # 2. Resize
                 img.thumbnail((cell_w, cell_h), Image.Resampling.BICUBIC)
                 
-                # 3. Apply Rounded Corners (New Step)
+                # 3. Apply Rounded Corners (SCALED)
                 if config.rounded_corners > 0:
-                    img = _apply_rounding(img, config.rounded_corners)
+                    scaled_radius = int(config.rounded_corners * radius_scale_factor)
+                    scaled_radius = max(1, scaled_radius) # Ensure at least 1px if slider > 0
+                    img = _apply_rounding(img, scaled_radius)
                 
                 # Center content if aspect ratio differs (though usually exact match here)
                 paste_x = current_x + (cell_w - img.width) // 2
@@ -267,7 +277,14 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
                     
                     # 3. Apply Rounded Corners (New Step)
                     if config.rounded_corners > 0:
-                        img = _apply_rounding(img, config.rounded_corners)
+                        # Timeline mode isn't as affected by the resolution mismatch 
+                        # because target_row_height is usually consistent, but 
+                        # strict scaling ensures WYSIWYG.
+                        # Assuming typical preview row height around 150px.
+                        radius_scale_factor = target_h / 150.0 
+                        scaled_radius = int(config.rounded_corners * radius_scale_factor)
+                        scaled_radius = max(1, scaled_radius)
+                        img = _apply_rounding(img, scaled_radius)
 
                     # Paste with mask to show background on corners
                     grid_image.paste(img, (x, y), mask=img)

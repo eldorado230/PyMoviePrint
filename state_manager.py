@@ -25,6 +25,9 @@ class ProjectSettings:
     input_paths: List[str] = field(default_factory=list)
     output_dir: str = ""
     
+    # NEW: Logic to save output to the same folder as the input video
+    save_alongside_video: bool = True 
+    
     # Extraction
     extraction_mode: str = "interval"
     interval_seconds: float = 5.0
@@ -67,6 +70,9 @@ class ProjectSettings:
     output_quality: int = 95
     max_frames_for_print: int = 100
     output_filename_suffix: str = "-thumb"
+    
+    # Metadata
+    save_metadata_json: bool = False  # Changed default to False per request
 
     def clone(self) -> 'ProjectSettings':
         """Create a shallow copy of settings (lists must be copied explicitly)."""
