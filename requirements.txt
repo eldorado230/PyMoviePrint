@@ -3,3 +3,4 @@ scenedetect
 Pillow==10.0.0
 tkinterdnd2
 numpy<2.0
+customtkinter
