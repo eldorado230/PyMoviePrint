@@ -37,7 +37,7 @@ class TestMovieprintMaker(unittest.TestCase):
             output_dir=self.output_dir,
             extraction_mode='interval',
             layout_mode='grid',
-            interval_seconds=1,
+            interval_seconds=1.0,  # Ensure float
             interval_frames=None,
             shot_threshold=27.0,
             rows=None,
@@ -52,7 +52,7 @@ class TestMovieprintMaker(unittest.TestCase):
             save_metadata_json=False,
             detect_faces=False,
             rotate_thumbnails=0,
-            start_time=None,
+            start_time="0", # Provide a valid start time string or handle None in video_processing
             end_time=None,
             exclude_frames=None,
             exclude_shots=None,

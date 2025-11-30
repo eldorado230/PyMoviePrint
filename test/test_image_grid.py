@@ -20,10 +20,19 @@ class TestImageGrid(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.test_dir)
-        os.remove(self.output_path)
+        if os.path.exists(self.output_path):
+            os.remove(self.output_path)
 
     def test_create_image_grid(self):
-        success, _ = create_image_grid(self.image_paths, self.output_path, 5, self.logger, columns=3)
+        # Update the call to use keyword arguments as per the new docstring/implementation
+        success, _ = create_image_grid(
+            image_source_data=self.image_paths,
+            output_path=self.output_path,
+            padding=5,
+            logger=self.logger,
+            columns=3,
+            layout_mode="grid"
+        )
         self.assertTrue(success)
         self.assertTrue(os.path.exists(self.output_path))
 

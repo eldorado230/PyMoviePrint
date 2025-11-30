@@ -1,3 +1,11 @@
+"""
+Module for generating image grids (MoviePrints) from a list of images.
+
+This module handles the layout, resizing, styling, and composition of thumbnails
+into a single contact sheet image. It supports both standard grid layouts and
+timeline-based layouts (where image widths vary by duration).
+"""
+
 from PIL import Image, ImageDraw, ImageColor, ImageFont, ImageChops
 import logging
 import os
@@ -11,7 +19,22 @@ from typing import List, Tuple, Optional, Dict, Union, Any
 
 @dataclass
 class FontConfig:
-    """Handles font settings."""
+    """
+    Handles configuration for fonts and text overlays on the MoviePrint.
+
+    Attributes:
+        show_header (bool): Whether to show the header with the filename.
+        show_file_path (bool): Whether to show the file path in the header (if supported).
+        show_timecode (bool): whether to show timecode.
+        show_frame_num (bool): whether to show frame number.
+        frame_info_show (bool): Whether to show info (timecode/frame) on thumbnails.
+        frame_info_type (str): 'timecode' or 'frame'.
+        font_color (str): Hex color for the font.
+        bg_color (str): Hex color for the text background box.
+        position (str): Position of the text on the thumbnail (e.g., "bottom_left").
+        size (int): Font size.
+        margin (int): Margin around the text.
+    """
     show_header: bool = True
     show_file_path: bool = True
     show_timecode: bool = True
@@ -23,8 +46,14 @@ class FontConfig:
     position: str = "bottom_left"
     size: int = 12
     margin: int = 5
-    
+
     def get_font_path(self) -> str:
+        """
+        Determines the appropriate font path based on the operating system.
+
+        Returns:
+            str: Path to a system font file.
+        """
         system = platform.system()
         if system == "Windows": return "arial.ttf"
         elif system == "Darwin": return "/System/Library/Fonts/Helvetica.ttc"
@@ -32,17 +61,34 @@ class FontConfig:
 
 @dataclass
 class GridConfig:
-    """Consolidates visual settings."""
+    """
+    Consolidates visual and layout settings for the MoviePrint.
+
+    Attributes:
+        output_path (str): File path where the generated image will be saved.
+        columns (int): Number of columns in the grid (for 'grid' mode).
+        target_thumb_width (Optional[int]): Desired width for thumbnails (overrides auto-size).
+        layout_mode (str): 'grid' or 'timeline'.
+        target_row_height (int): Target height for rows (for 'timeline' mode).
+        output_width (int): Total width of the output image (for 'timeline' mode).
+        padding (int): Padding between thumbnails in pixels.
+        bg_color_hex (str): Background color in hex format.
+        grid_margin (int): Margin around the entire grid.
+        rounded_corners (int): Radius for rounded corners.
+        rotation (int): Rotation angle for thumbnails (0, 90, 180, 270).
+        quality (int): JPEG quality for the output image.
+        font_settings (FontConfig): Nested configuration for fonts.
+    """
     output_path: str
     # Grid Specific
     columns: int = 5
     target_thumb_width: Optional[int] = None
-    
+
     # Timeline Specific
     layout_mode: str = "grid" # 'grid' or 'timeline'
     target_row_height: int = 150
     output_width: int = 1920
-    
+
     # Common
     padding: int = 5
     bg_color_hex: str = "#1E1E1E"
@@ -55,12 +101,32 @@ class GridConfig:
 # --- Helper Functions ---
 
 def _load_font(name_or_path: str, size: int) -> ImageFont.FreeTypeFont:
+    """
+    Attempts to load a font, falling back to defaults if necessary.
+
+    Args:
+        name_or_path (str): Path to the font file or font name.
+        size (int): Size of the font.
+
+    Returns:
+        ImageFont.FreeTypeFont: The loaded font object, or a default font.
+    """
     try: return ImageFont.truetype(name_or_path, size)
     except IOError:
         try: return ImageFont.truetype("arial.ttf", size)
         except IOError: return ImageFont.load_default()
 
 def _apply_rotation(img: Image.Image, rotation: int) -> Image.Image:
+    """
+    Rotates an image by the specified angle.
+
+    Args:
+        img (Image.Image): The PIL Image object to rotate.
+        rotation (int): Rotation angle in degrees (0, 90, 180, 270).
+
+    Returns:
+        Image.Image: The rotated image.
+    """
     if rotation == 90: return img.rotate(-90, expand=True)
     elif rotation == 180: return img.rotate(180)
     elif rotation == 270: return img.rotate(-270, expand=True)
@@ -69,33 +135,51 @@ def _apply_rotation(img: Image.Image, rotation: int) -> Image.Image:
 def _apply_rounding(img: Image.Image, radius: int) -> Image.Image:
     """
     Applies rounded corners to an image by modifying its alpha channel.
+
+    Args:
+        img (Image.Image): The PIL Image object.
+        radius (int): The radius of the rounded corners in pixels.
+
+    Returns:
+        Image.Image: The image with rounded corners applied.
     """
     if radius <= 0:
         return img
-    
+
     # Ensure we are working with RGBA to have an alpha channel
     img = img.convert("RGBA")
-    
+
     # Create a mask (white = visible, black = transparent)
     mask = Image.new('L', img.size, 0)
     draw = ImageDraw.Draw(mask)
-    
+
     # Draw the white rounded rectangle
     draw.rounded_rectangle([(0, 0), img.size], radius=radius, fill=255)
-    
+
     # Combine the new mask with the existing alpha channel (if any)
     # This preserves existing transparency inside the image while cropping corners
     existing_alpha = img.split()[3]
     final_alpha = ImageChops.multiply(existing_alpha, mask)
-    
+
     img.putalpha(final_alpha)
     return img
 
 def _draw_frame_info(draw, text, img_w, img_h, conf, font):
+    """
+    Draws text information (like timecode or frame number) onto an image.
+
+    Args:
+        draw (ImageDraw.ImageDraw): The drawing context.
+        text (str): The text to draw.
+        img_w (int): Width of the image.
+        img_h (int): Height of the image.
+        conf (FontConfig): Font configuration settings.
+        font (ImageFont.FreeTypeFont): The loaded font object.
+    """
     bbox = draw.textbbox((0, 0), text, font=font)
     text_w, text_h = bbox[2] - bbox[0], bbox[3] - bbox[1]
     m = conf.margin
-    
+
     if conf.position == "bottom_left": x, y = m, img_h - text_h - m - 4
     elif conf.position == "bottom_right": x, y = img_w - text_w - m - 4, img_h - text_h - m - 4
     elif conf.position == "top_left": x, y = m, m
@@ -108,13 +192,23 @@ def _draw_frame_info(draw, text, img_w, img_h, conf, font):
 # --- Layout Engines ---
 
 def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger: logging.Logger):
-    """Standard grid layout."""
+    """
+    Generates a standard grid layout where thumbnails are arranged in fixed columns.
+
+    Args:
+        image_paths (List[str]): List of file paths to the images.
+        config (GridConfig): Grid configuration settings.
+        logger (logging.Logger): Logger for error reporting.
+
+    Returns:
+        Tuple[bool, List[Dict]]: A tuple containing a success boolean and a list of layout metadata.
+    """
     layout_data = []
     if not image_paths: return False, []
 
     # 1. Determine Cell Size
     cell_w, cell_h = 0, 0
-    
+
     # Simple autosizing logic
     max_w, max_h = 0, 0
     for p in image_paths[:5]: # Check first few to guess size
@@ -125,7 +219,7 @@ def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger
                 max_w = max(max_w, w)
                 max_h = max(max_h, h)
         except: pass
-    
+
     cell_w = config.target_thumb_width if config.target_thumb_width else (max_w or 200)
     # Maintain aspect ratio for height if possible, else default
     if max_w > 0: cell_h = int(cell_w * (max_h / max_w))
@@ -133,7 +227,7 @@ def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger
 
     num_images = len(image_paths)
     rows = math.ceil(num_images / config.columns)
-    
+
     header_height = 50 if config.font_settings.show_header else 0
     grid_w = (config.columns * cell_w) + ((config.columns - 1) * config.padding) + (2 * config.grid_margin)
     grid_h = (rows * cell_h) + ((rows - 1) * config.padding) + (2 * config.grid_margin) + header_height
@@ -153,8 +247,8 @@ def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger
     info_font = _load_font(config.font_settings.get_font_path(), config.font_settings.size)
 
     # --- Pre-calculate Radius Scale ---
-    # The preview in GUI uses ~480px width images. 
-    # If we are processing full-res (e.g. 1920px), we must scale the radius 
+    # The preview in GUI uses ~480px width images.
+    # If we are processing full-res (e.g. 1920px), we must scale the radius
     # so the roundness looks the same as it did in the preview window.
     radius_scale_factor = 1.0
     if cell_w > 0:
@@ -166,16 +260,16 @@ def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger
                 # 1. Rotate
                 img = _apply_rotation(img, config.rotation)
                 img = img.convert("RGBA")
-                
+
                 # 2. Resize
                 img.thumbnail((cell_w, cell_h), Image.Resampling.BICUBIC)
-                
+
                 # 3. Apply Rounded Corners (SCALED)
                 if config.rounded_corners > 0:
                     scaled_radius = int(config.rounded_corners * radius_scale_factor)
                     scaled_radius = max(1, scaled_radius) # Ensure at least 1px if slider > 0
                     img = _apply_rounding(img, scaled_radius)
-                
+
                 # Center content if aspect ratio differs (though usually exact match here)
                 paste_x = current_x + (cell_w - img.width) // 2
                 paste_y = current_y + (cell_h - img.height) // 2
@@ -204,18 +298,28 @@ def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger
 
 def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig, logger: logging.Logger):
     """
-    Timeline layout: Rows are packed greedily; images have variable width based on 'width_ratio' (duration).
+    Generates a timeline layout where rows are packed greedily and images have variable widths.
+
+    This layout is typically used with shot detection to visualize scene duration.
+
+    Args:
+        source_data (List[Dict[str, Any]]): List of metadata dictionaries for each image.
+        config (GridConfig): Grid configuration settings.
+        logger (logging.Logger): Logger for error reporting.
+
+    Returns:
+        Tuple[bool, List[Dict]]: A tuple containing a success boolean and a list of layout metadata.
     """
     layout_data = []
     if not source_data: return False, []
 
     target_h = config.target_row_height
     max_w = config.output_width - (2 * config.grid_margin)
-    
+
     rows = []
     current_row = []
     current_row_width = 0
-    
+
     # Pre-calculate items
     items = []
     for item in source_data:
@@ -236,67 +340,67 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
         current_row.append(item)
         current_row_width += item['w'] + config.padding
     if current_row: rows.append(current_row)
-    
+
     header_height = 50 if config.font_settings.show_header else 0
     total_grid_h = (len(rows) * (target_h + config.padding)) + header_height + (2 * config.grid_margin)
-    
+
     try:
         bg_rgb = ImageColor.getrgb(config.bg_color_hex)
         grid_image = Image.new("RGB", (config.output_width, total_grid_h), bg_rgb)
     except: return False, []
-    
+
     draw = ImageDraw.Draw(grid_image)
     if config.font_settings.show_header and source_data:
         f = _load_font(config.font_settings.get_font_path(), 20)
         draw.text((config.grid_margin, config.grid_margin), os.path.basename(source_data[0]['image_path']), font=f, fill=config.font_settings.font_color)
-        
+
     y = config.grid_margin + header_height
     info_font = _load_font(config.font_settings.get_font_path(), config.font_settings.size)
-    
+
     for row in rows:
         x = config.grid_margin
         row_content_w = sum(i['w'] for i in row) + ((len(row)-1) * config.padding)
         available_w = max_w
-        
+
         scale = 1.0
         if row_content_w > 0 and row != rows[-1]:
              scale = available_w / row_content_w
-        
+
         for item in row:
             try:
                 draw_w = int(item['w'] * scale)
-                draw_h = target_h 
-                
+                draw_h = target_h
+
                 with Image.open(item['path']) as img:
                     # 1. Rotate
                     img = _apply_rotation(img, config.rotation)
                     img = img.convert("RGBA")
-                    
+
                     # 2. Resize
                     img = img.resize((draw_w, target_h), Image.Resampling.BICUBIC)
-                    
+
                     # 3. Apply Rounded Corners (New Step)
                     if config.rounded_corners > 0:
-                        # Timeline mode isn't as affected by the resolution mismatch 
-                        # because target_row_height is usually consistent, but 
+                        # Timeline mode isn't as affected by the resolution mismatch
+                        # because target_row_height is usually consistent, but
                         # strict scaling ensures WYSIWYG.
                         # Assuming typical preview row height around 150px.
-                        radius_scale_factor = target_h / 150.0 
+                        radius_scale_factor = target_h / 150.0
                         scaled_radius = int(config.rounded_corners * radius_scale_factor)
                         scaled_radius = max(1, scaled_radius)
                         img = _apply_rounding(img, scaled_radius)
 
                     # Paste with mask to show background on corners
                     grid_image.paste(img, (x, y), mask=img)
-                    
+
                     if config.font_settings.frame_info_show:
                         d_tmp = ImageDraw.Draw(img)
                         _draw_frame_info(d_tmp, "Shot", draw_w, target_h, config.font_settings, info_font)
-                    
+
                     layout_data.append({'image_path': item['path'], 'x': x, 'y': y, 'width': draw_w, 'height': target_h})
                     x += draw_w + int(config.padding * scale)
             except: pass
-        
+
         y += target_h + config.padding
 
     try:
@@ -307,7 +411,25 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
         return False, []
 
 def create_image_grid(**kwargs):
-    """Adapter function."""
+    """
+    Main entry point for creating an image grid (MoviePrint).
+
+    This function parses the keyword arguments into configuration objects and
+    dispatches the request to the appropriate layout engine (grid or timeline).
+
+    Args:
+        **kwargs: Arbitrary keyword arguments mapping to GridConfig and FontConfig fields.
+            Common arguments include:
+            - output_path (str): Path to save the result.
+            - layout_mode (str): 'grid' or 'timeline'.
+            - columns (int): Number of columns (grid mode).
+            - image_source_data (List): List of images or metadata.
+            - logger (logging.Logger): Logger instance.
+            - See GridConfig and FontConfig for other supported arguments.
+
+    Returns:
+        Tuple[bool, List[Dict]]: A tuple containing a success boolean and a list of layout metadata.
+    """
     font_conf = FontConfig(
         show_header=kwargs.get("show_header", True),
         frame_info_show=kwargs.get("frame_info_show", False),
@@ -334,7 +456,7 @@ def create_image_grid(**kwargs):
         output_width=kwargs.get("max_grid_width", 1920), # mapped from caller
         font_settings=font_conf
     )
-    
+
     logger = kwargs.get("logger", logging.getLogger("image_grid"))
     image_source_data = kwargs.get("image_source_data", [])
 
@@ -342,5 +464,5 @@ def create_image_grid(**kwargs):
         return _create_fixed_column_grid(image_source_data, grid_conf, logger)
     elif grid_conf.layout_mode == "timeline":
         return _create_timeline_grid(image_source_data, grid_conf, logger)
-    
+
     return False, []
