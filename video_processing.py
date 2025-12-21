@@ -1,12 +1,3 @@
-"""
-Module for video processing and frame extraction.
-
-This module provides utilities to check for FFmpeg availability and capabilities (like GPU support),
-and a `VideoExtractor` class that handles the extraction of frames from video files using either
-OpenCV or FFmpeg. It supports extracting frames at specific intervals, specific timestamps,
-or based on shot/scene detection.
-"""
-
 import cv2
 import logging
 import os
@@ -29,15 +20,10 @@ FFMPEG_BIN = 'ffmpeg'
 
 class VideoUtils:
     """Static utilities for system checks and FFmpeg capability probing."""
-
+    
     @staticmethod
     def get_startup_info():
-        """
-        Suppress console windows on Windows to prevent popping up terminals.
-
-        Returns:
-            subprocess.STARTUPINFO or None: The startup info object for Windows, or None for other OS.
-        """
+        """Suppress console windows on Windows to prevent popping up terminals."""
         if os.name == 'nt':
             startupinfo = subprocess.STARTUPINFO()
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
@@ -46,24 +32,16 @@ class VideoUtils:
 
     @staticmethod
     def check_ffmpeg_gpu(logger: logging.Logger) -> bool:
-        """
-        Checks if ffmpeg is installed and supports CUDA (NVDEC).
-
-        Args:
-            logger (logging.Logger): Logger to record findings.
-
-        Returns:
-            bool: True if FFmpeg is found and supports CUDA, False otherwise.
-        """
+        """Checks if ffmpeg is installed and supports CUDA (NVDEC)."""
         if not shutil.which(FFMPEG_BIN):
             return False
-
+        
         try:
             # Check for hardware acceleration support
             result = subprocess.run(
-                [FFMPEG_BIN, '-hwaccels'],
-                capture_output=True,
-                text=True,
+                [FFMPEG_BIN, '-hwaccels'], 
+                capture_output=True, 
+                text=True, 
                 startupinfo=VideoUtils.get_startup_info(),
                 timeout=5
             )
@@ -72,28 +50,19 @@ class VideoUtils:
                 return True
         except Exception as e:
             logger.warning(f"Error checking FFmpeg capabilities: {e}")
-
+        
         return False
 
     @staticmethod
     def run_ffmpeg_command(cmd: List[str], logger: logging.Logger) -> bool:
-        """
-        Helper to run ffmpeg safely with error logging.
-
-        Args:
-            cmd (List[str]): The command list to execute.
-            logger (logging.Logger): Logger for debug and error messages.
-
-        Returns:
-            bool: True if the command executed successfully (return code 0), False otherwise.
-        """
+        """Helper to run ffmpeg safely with error logging."""
         logger.debug(f"Running FFmpeg: {' '.join(cmd)}")
         try:
             subprocess.run(
-                cmd,
-                check=True,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
+                cmd, 
+                check=True, 
+                stdout=subprocess.PIPE, 
+                stderr=subprocess.PIPE, 
                 startupinfo=VideoUtils.get_startup_info()
             )
             return True
@@ -111,63 +80,39 @@ class VideoExtractor:
     Implements Context Manager protocol to ensure file handles are always released.
     """
     def __init__(self, video_path: str, logger: Optional[logging.Logger] = None):
-        """
-        Initialize the VideoExtractor.
-
-        Args:
-            video_path (str): Path to the video file.
-            logger (Optional[logging.Logger]): Logger instance. Defaults to a new logger for this module.
-
-        Raises:
-            FileNotFoundError: If the video path does not exist.
-        """
         self.video_path = video_path
         self.video_filename = os.path.basename(video_path)
         self.logger = logger or logging.getLogger(__name__)
         self._cap: Optional[cv2.VideoCapture] = None
-
+        
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"Video file not found: {video_path}")
 
     def __enter__(self):
-        """
-        Enters the context manager, opening the video file with OpenCV.
-
-        Returns:
-            VideoExtractor: The instance itself.
-        """
         self._cap = cv2.VideoCapture(self.video_path)
         if not self._cap.isOpened():
-            # We don't raise here immediately to allow FFmpeg-only operations
+            # We don't raise here immediately to allow FFmpeg-only operations 
             # to proceed even if OpenCV fails, but we log it.
             self.logger.warning(f"OpenCV failed to open {self.video_path}. Scrubbing may fail.")
         return self
 
     def __exit__(self, exc_type, exc_val, exc_tb):
-        """
-        Exits the context manager, releasing the OpenCV video capture resource.
-        """
         if self._cap:
             self._cap.release()
 
     @property
     def properties(self) -> Tuple[float, float, int]:
-        """
-        Returns basic properties of the video. Safe to call repeatedly.
-
-        Returns:
-            Tuple[float, float, int]: A tuple containing (fps, duration_seconds, total_frames).
-        """
+        """Returns (fps, duration_sec, total_frames). Safe to call repeatedly."""
         cap = self._cap
         local_open = False
-
+        
         if not cap or not cap.isOpened():
             cap = cv2.VideoCapture(self.video_path)
             local_open = True
-
+            
         try:
             if not cap.isOpened(): return 24.0, 0.0, 0
-
+            
             fps = cap.get(cv2.CAP_PROP_FPS)
             if fps <= 0: fps = 24.0
             frame_count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
@@ -180,16 +125,10 @@ class VideoExtractor:
         """
         Extracts a single frame at a specific timestamp.
         Used primarily for the Scrubbing feature.
-
-        Args:
-            timestamp_sec (float): The timestamp in seconds.
-
-        Returns:
-            Optional[Any]: The extracted frame as a numpy array (OpenCV image), or None if failed.
         """
         cap = self._cap
         local_open = False
-
+        
         # Fallback if context manager wasn't used
         if not cap or not cap.isOpened():
             cap = cv2.VideoCapture(self.video_path)
@@ -206,33 +145,24 @@ class VideoExtractor:
         finally:
             if local_open: cap.release()
 
-    def extract_timestamps(self, timestamps: List[float], output_folder: str,
+    def extract_timestamps(self, timestamps: List[float], output_folder: str, 
                          ext: str = "jpg", fast_preview: bool = False) -> List[Dict[str, Any]]:
         """
         OpenCV-based extraction for specific timestamps.
         Best for Grid Layouts where we need exact points in time.
-
-        Args:
-            timestamps (List[float]): List of timestamps in seconds to extract.
-            output_folder (str): Directory to save extracted images.
-            ext (str): Image extension (e.g., "jpg").
-            fast_preview (bool): If True, optimize for speed by resizing during extraction.
-
-        Returns:
-            List[Dict[str, Any]]: A list of metadata dictionaries for the extracted frames.
         """
         results = []
         Path(output_folder).mkdir(parents=True, exist_ok=True)
-
+        
         cap = self._cap
         local_open = False
         if not cap or not cap.isOpened():
             cap = cv2.VideoCapture(self.video_path)
             local_open = True
-
+            
         try:
             if not cap.isOpened(): return []
-
+            
             # Get video limits to prevent seeking past end
             fps = cap.get(cv2.CAP_PROP_FPS) or 24.0
             total_frames = cap.get(cv2.CAP_PROP_FRAME_COUNT)
@@ -243,7 +173,7 @@ class VideoExtractor:
             for i, ts in enumerate(timestamps):
                 # Clamp timestamp
                 ts = max(0.0, min(ts, duration - 0.1))
-
+                
                 cap.set(cv2.CAP_PROP_POS_MSEC, ts * 1000)
                 ret, frame = cap.read()
 
@@ -258,7 +188,7 @@ class VideoExtractor:
                     safe_ts = f"{ts:.2f}".replace('.', '_')
                     fname = f"thumb_{i:03d}_ts{safe_ts}.{ext}"
                     out_path = os.path.join(output_folder, fname)
-
+                    
                     try:
                         cv2.imwrite(out_path, frame)
                         results.append({
@@ -271,22 +201,14 @@ class VideoExtractor:
                         self.logger.warning(f"Write failed {out_path}: {e}")
         finally:
             if local_open: cap.release()
-
+            
         return results
 
-    def extract_shots(self, output_folder: str, threshold: float = 27.0,
+    def extract_shots(self, output_folder: str, threshold: float = 27.0, 
                      ext: str = "jpg") -> List[Dict[str, Any]]:
         """
         PySceneDetect wrapper.
         Finds scene changes, then extracts the first frame of every new scene.
-
-        Args:
-            output_folder (str): Directory to save extracted images.
-            threshold (float): Scene detection threshold (sensitivity).
-            ext (str): Image extension (e.g., "jpg").
-
-        Returns:
-            List[Dict[str, Any]]: A list of metadata dictionaries for the extracted frames.
         """
         if not SCENEDETECT_AVAILABLE:
             self.logger.error("PySceneDetect not installed.")
@@ -299,9 +221,9 @@ class VideoExtractor:
             video_manager = open_video(self.video_path)
             scene_manager = SceneManager()
             scene_manager.add_detector(ContentDetector(threshold=threshold))
-
+            
             # Detect
-            scene_manager.detect_scenes(video=video_manager, show_progress=False)
+            scene_manager.detect_scenes(video=video_manager, show_progress=True)
             scene_list = scene_manager.get_scene_list(start_in_scene=True)
 
             # Extract
@@ -309,12 +231,12 @@ class VideoExtractor:
             for i, (start, end) in enumerate(scene_list):
                 ts = start.get_seconds()
                 frame = self.extract_single_frame(ts)
-
+                
                 if frame is not None:
                     fname = f"shot_{i:04d}_ts{ts:.2f}.{ext}"
                     out_path = os.path.join(output_folder, fname)
                     cv2.imwrite(out_path, frame)
-
+                    
                     results.append({
                         'frame_path': out_path,
                         'timestamp_sec': ts,
@@ -324,13 +246,13 @@ class VideoExtractor:
                     })
         except Exception as e:
             self.logger.error(f"Shot detection failed: {e}")
-
+            
         return results
 
-    def extract_via_ffmpeg(self, output_folder: str,
+    def extract_via_ffmpeg(self, output_folder: str, 
                           interval_sec: Optional[float] = None,
                           interval_frames: Optional[int] = None,
-                          ext: str = "jpg",
+                          ext: str = "jpg", 
                           use_gpu: bool = False,
                           start_time: float = 0.0,
                           end_time: Optional[float] = None,
@@ -338,19 +260,6 @@ class VideoExtractor:
         """
         Robust FFmpeg extraction with GPU fallback and file renaming.
         Preferred for "Interval" mode as it is generally faster than OpenCV loops.
-
-        Args:
-            output_folder (str): Directory to save extracted images.
-            interval_sec (Optional[float]): Time interval in seconds between frames.
-            interval_frames (Optional[int]): Frame interval between frames.
-            ext (str): Image extension.
-            use_gpu (bool): Whether to attempt GPU acceleration.
-            start_time (float): Start time in seconds.
-            end_time (Optional[float]): End time in seconds.
-            fast_preview (bool): If True, uses lower quality settings for speed.
-
-        Returns:
-            List[Dict[str, Any]]: A list of metadata dictionaries for the extracted frames.
         """
         if not shutil.which(FFMPEG_BIN):
             self.logger.error("FFmpeg binary not found.")
@@ -358,7 +267,7 @@ class VideoExtractor:
 
         results = []
         Path(output_folder).mkdir(parents=True, exist_ok=True)
-
+        
         # 1. Calculate properties
         fps, duration, _ = self.properties
         if fps <= 0: fps = 24.0
@@ -378,14 +287,14 @@ class VideoExtractor:
 
         vf_filter = ",".join(filters)
         q_scale = '5' if fast_preview else '2' # 2 is high quality
-
+        
         # 3. Build Command
         # Output pattern: ffmpeg_out_00001.jpg
         output_pattern = os.path.join(output_folder, f"ffmpeg_out_%05d.{ext}")
-
+        
         base_cmd = [FFMPEG_BIN]
         input_args = ['-ss', str(start_time), '-i', self.video_path, '-sn', '-an', '-dn']
-
+        
         duration_args = []
         if end_time:
             duration_val = end_time - start_time
@@ -407,7 +316,7 @@ class VideoExtractor:
             gpu_cmd = base_cmd + ['-hwaccel', 'cuda'] + input_args + output_args
             if VideoUtils.run_ffmpeg_command(gpu_cmd, self.logger):
                 success = True
-
+        
         if not success:
             if use_gpu: self.logger.info("GPU failed/unavailable, falling back to CPU.")
             cpu_cmd = base_cmd + input_args + output_args
@@ -418,10 +327,10 @@ class VideoExtractor:
         # 5. Post-Process: Rename files to match application standard
         # Standard: frame_{i}_absFN{frame}.jpg
         generated_files = sorted(glob.glob(os.path.join(output_folder, f"ffmpeg_out_*.{ext}")))
-
+        
         for i, file_path in enumerate(generated_files):
             # Estimate timestamps based on interval
-            # Note: This is an estimation. FFmpeg frame extraction is accurate,
+            # Note: This is an estimation. FFmpeg frame extraction is accurate, 
             # but mapping index back to exact timestamp requires math.
             if interval_sec:
                 est_time = start_time + (i * interval_sec)
@@ -450,23 +359,10 @@ class VideoExtractor:
 
 # --- BACKWARD COMPATIBILITY WRAPPERS (Add these to fix the Attribute Error) ---
 
-def extract_frames_from_timestamps(video_path: str, timestamps: List[float], output_folder: str,
-                                  logger: logging.Logger, output_format: str = "jpg",
+def extract_frames_from_timestamps(video_path: str, timestamps: List[float], output_folder: str, 
+                                  logger: logging.Logger, output_format: str = "jpg", 
                                   fast_preview: bool = False) -> Tuple[bool, List[Dict]]:
-    """
-    Wrapper for extract_timestamps to maintain compatibility with legacy calls.
-
-    Args:
-        video_path (str): Path to video.
-        timestamps (List[float]): Timestamps to extract.
-        output_folder (str): Destination folder.
-        logger (logging.Logger): Logger instance.
-        output_format (str): Image format.
-        fast_preview (bool): Optimize for preview speed.
-
-    Returns:
-        Tuple[bool, List[Dict]]: Success flag and metadata list.
-    """
+    """Wrapper to maintain compatibility with movieprint_gui.py and legacy calls."""
     try:
         with VideoExtractor(video_path, logger) as extractor:
             meta = extractor.extract_timestamps(
@@ -480,24 +376,10 @@ def extract_frames_from_timestamps(video_path: str, timestamps: List[float], out
         logger.error(f"Error in extract_frames_from_timestamps: {e}")
         return False, []
 
-def extract_shot_boundary_frames(video_path: str, output_folder: str, logger: logging.Logger,
-                                detector_threshold: float = 27.0, output_format: str = "jpg",
+def extract_shot_boundary_frames(video_path: str, output_folder: str, logger: logging.Logger, 
+                                detector_threshold: float = 27.0, output_format: str = "jpg", 
                                 start_time_sec: float = 0.0, end_time_sec: float = None) -> Tuple[bool, List[Dict]]:
-    """
-    Wrapper for shot detection calls.
-
-    Args:
-        video_path (str): Path to video.
-        output_folder (str): Destination folder.
-        logger (logging.Logger): Logger instance.
-        detector_threshold (float): Scene detection threshold.
-        output_format (str): Image format.
-        start_time_sec (float): Start time filter.
-        end_time_sec (float): End time filter.
-
-    Returns:
-        Tuple[bool, List[Dict]]: Success flag and metadata list.
-    """
+    """Wrapper for shot detection calls."""
     try:
         with VideoExtractor(video_path, logger) as extractor:
             meta = extractor.extract_shots(
@@ -514,35 +396,18 @@ def extract_shot_boundary_frames(video_path: str, output_folder: str, logger: lo
                     if end_time_sec is not None and ts > end_time_sec: continue
                     filtered.append(item)
                 meta = filtered
-
+                
         return True, meta
     except Exception as e:
         logger.error(f"Error in extract_shot_boundary_frames: {e}")
         return False, []
 
-def extract_frames(video_path: str, output_folder: str, logger: logging.Logger,
+def extract_frames(video_path: str, output_folder: str, logger: logging.Logger, 
                    interval_seconds: float = None, interval_frames: int = None,
-                   output_format: str = "jpg", start_time_sec: float = 0.0,
-                   end_time_sec: float = None, use_gpu: bool = False,
+                   output_format: str = "jpg", start_time_sec: float = 0.0, 
+                   end_time_sec: float = None, use_gpu: bool = False, 
                    fast_preview: bool = False) -> Tuple[bool, List[Dict]]:
-    """
-    Wrapper for FFmpeg interval extraction calls.
-
-    Args:
-        video_path (str): Path to video.
-        output_folder (str): Destination folder.
-        logger (logging.Logger): Logger instance.
-        interval_seconds (float): Interval in seconds.
-        interval_frames (int): Interval in frames.
-        output_format (str): Image format.
-        start_time_sec (float): Start time.
-        end_time_sec (float): End time.
-        use_gpu (bool): Use GPU acceleration.
-        fast_preview (bool): Fast preview mode.
-
-    Returns:
-        Tuple[bool, List[Dict]]: Success flag and metadata list.
-    """
+    """Wrapper for FFmpeg interval extraction calls."""
     try:
         with VideoExtractor(video_path, logger) as extractor:
             meta = extractor.extract_via_ffmpeg(
