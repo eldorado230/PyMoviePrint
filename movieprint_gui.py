@@ -602,6 +602,11 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         adv_frame.pack(fill="x", padx=10, pady=5)
         self._populate_advanced_settings(adv_frame.get_content_frame())
 
+        # New HDR Section
+        hdr_frame = CTkCollapsibleFrame(parent, title="HDR & Color")
+        hdr_frame.pack(fill="x", padx=10, pady=5)
+        self._populate_hdr_settings(hdr_frame.get_content_frame())
+
     def _create_cyber_slider_section(self, parent):
         self.slider_frame = ctk.CTkFrame(parent, fg_color="transparent")
         self.slider_frame.pack(fill="x", padx=10, pady=10)
@@ -708,6 +713,29 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         
         self.update_visibility_state()
 
+    def _populate_hdr_settings(self, parent):
+        # HDR Controls
+        ctk.CTkLabel(parent, text="HDR to SDR Tone Mapping", font=Theme.FONT_BOLD).pack(anchor="w", pady=(5,0))
+        ctk.CTkLabel(parent, text="Converts washed-out HDR colors to normal SDR.", font=("Roboto", 10), text_color=Theme.TEXT_MUTED).pack(anchor="w", pady=(0,5))
+        
+        self.hdr_switch = ctk.CTkSwitch(parent, text="Enable Tone Mapping", variable=self.hdr_tonemap_var, progress_color=Theme.ACCENT_CYAN, command=self._toggle_hdr_options)
+        self.hdr_switch.pack(anchor="w", pady=5)
+        
+        self.hdr_algo_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.hdr_algo_frame.pack(fill="x", padx=20)
+        
+        ctk.CTkLabel(self.hdr_algo_frame, text="Algorithm:").pack(side="left")
+        self.hdr_algo_combo = ctk.CTkComboBox(self.hdr_algo_frame, values=["hable", "reinhard", "mobius"], variable=self.hdr_algorithm_var, border_color=Theme.ACCENT_CYAN, button_color=Theme.ACCENT_CYAN)
+        self.hdr_algo_combo.pack(side="left", padx=10)
+        
+        self._toggle_hdr_options()
+
+    def _toggle_hdr_options(self):
+        if self.hdr_tonemap_var.get():
+            self.hdr_algo_frame.pack(fill="x", padx=20, pady=5)
+        else:
+            self.hdr_algo_frame.pack_forget()
+
     def _toggle_naming_inputs(self, mode=None):
         if mode is None:
             mode = self.output_naming_mode_var.get()
@@ -787,6 +815,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         
         self.update_visibility_state()
         self._toggle_naming_inputs()
+        self._toggle_hdr_options()
         if state.thumbnail_metadata and self.preview_temp_dir:
             self._restore_grid_visuals(state, settings)
         self._update_live_math()
@@ -878,7 +907,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             'rounded': int(self.rounded_corners_var.get()),
             'show_header': self.show_header_var.get(),
             'target_row_height': int(self.target_row_height_var.get() or 150),
-            'frame_info_show': self.frame_info_show_var.get()
+            'frame_info_show': self.frame_info_show_var.get(),
+            'hdr_tonemap': self.hdr_tonemap_var.get(),
+            'hdr_algorithm': self.hdr_algorithm_var.get()
         }
 
         self.status_lbl.configure(text="Generating Preview...")
@@ -899,6 +930,12 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         success = False
 
         try:
+            # Auto-detect notification (optional)
+            if not config['hdr_tonemap']:
+                 with DependencyManager.video_processing.VideoExtractor(video_path, logger) as ve:
+                    if ve.detect_hdr():
+                        self.queue.put(("log", "HDR content detected. Enable Tone Mapping for correct colors."))
+
             if config['extraction_mode'] == 'shot':
                 self.queue.put(("log", f"Detecting shots (Threshold {config['shot_threshold']})..."))
                 success, meta = DependencyManager.video_processing.extract_shot_boundary_frames(
@@ -920,9 +957,24 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 timestamps = np.linspace(0, duration, total_frames+2)[1:-1]
                 
                 self.queue.put(("log", f"Extracting {total_frames} frames..."))
-                success, meta = DependencyManager.video_processing.extract_frames_from_timestamps(
-                    video_path, timestamps, temp_dir, logger, fast_preview=True
-                )
+                
+                if config['hdr_tonemap']:
+                    self.queue.put(("log", "Generating HDR Preview (FFmpeg)..."))
+                    interval = duration / total_frames
+                    success, meta = DependencyManager.video_processing.extract_frames(
+                        video_path, temp_dir, logger, 
+                        interval_seconds=interval, 
+                        fast_preview=True, 
+                        hdr_tonemap=True, 
+                        hdr_algorithm=config['hdr_algorithm']
+                    )
+                    # FFmpeg interval may give slight mismatch in count, trim if needed
+                    if len(meta) > total_frames:
+                        meta = meta[:total_frames]
+                else:
+                    success, meta = DependencyManager.video_processing.extract_frames_from_timestamps(
+                        video_path, timestamps, temp_dir, logger, fast_preview=True
+                    )
             
             if success and meta:
                 self._process_preview_thumbnails(meta, config, logger)
@@ -1047,6 +1099,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def is_scrubbing_active(self): return self.scrubbing_handler.active
 
     def start_scrubbing(self, event):
+        # Wrapper to be called from Canvas
+        return self.start_scrubbing_logic(event)
+
+    def start_scrubbing_logic(self, event):
         layout = self.state_manager.get_state().thumbnail_layout_data
         if not layout or not self.preview_zoomable_canvas.original_image: return False
         
@@ -1143,6 +1199,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             settings.detect_faces = self.detect_faces_var.get()
             settings.rotate_thumbnails = int(self.rotate_thumbnails_var.get())
             settings.output_quality = int(self.output_quality_var.get())
+            
+            # Pass HDR settings
+            settings.hdr_tonemap = self.hdr_tonemap_var.get()
+            settings.hdr_algorithm = self.hdr_algorithm_var.get()
 
             rows = int(self.num_rows_var.get())
             cols = int(self.num_columns_var.get())
@@ -1346,6 +1406,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 
                 self.update_visibility_state()
                 self._toggle_naming_inputs()
+                self._toggle_hdr_options()
         except Exception: pass
 
     def _on_closing(self):

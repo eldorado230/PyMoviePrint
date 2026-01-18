@@ -16,8 +16,7 @@ try:
     import image_grid
 except ImportError as e:
     print(f"Error importing modules: {e}")
-    print("Please ensure 'video_processing.py' and 'image_grid.py' are in the same directory"
-          " or accessible in the Python path.")
+    print("Please ensure 'video_processing.py' and 'image_grid.py' are in the same directory.")
     exit(1)
 
 # --- Helpers ---
@@ -40,9 +39,7 @@ def parse_time_to_seconds(time_str):
     return None
 
 def discover_video_files(input_sources, valid_extensions_str, recursive_scan, logger):
-    """
-    Scans input paths (files or directories) for valid video files.
-    """
+    """Scans input paths (files or directories) for valid video files."""
     video_files_found = set()
     valid_extensions = [ext.strip().lower() for ext in valid_extensions_str.split(',')]
     
@@ -68,17 +65,12 @@ def discover_video_files(input_sources, valid_extensions_str, recursive_scan, lo
                     _, file_ext = os.path.splitext(item_path)
                     if file_ext.lower() in valid_extensions: 
                         video_files_found.add(item_path)
-        else: 
-            logger.warning(f"Input path '{abs_source_path}' not a file/directory. Skipping.")
-            
+    
     return sorted(list(video_files_found))
 
 def enforce_max_filesize(image_path, target_kb, logger):
-    """
-    Iteratively reduces image quality/size to meet a target file size (KB).
-    """
-    if target_kb is None:
-        return
+    """Iteratively reduces image quality/size to meet a target file size (KB)."""
+    if target_kb is None: return
 
     try:
         current_kb = os.path.getsize(image_path) / 1024.0
@@ -87,7 +79,6 @@ def enforce_max_filesize(image_path, target_kb, logger):
         return
 
     if current_kb <= target_kb:
-        logger.info(f"  Output size {current_kb:.1f} KB already below target {target_kb} KB.")
         return
 
     try:
@@ -118,7 +109,7 @@ def enforce_max_filesize(image_path, target_kb, logger):
                     logger.info(f"  Adjusted output size to {current_kb:.1f} KB <= {target_kb} KB.")
                     return
                 
-                # Degrade quality for next iteration if needed
+                # Degrade quality for next iteration
                 width, height = img_resized.size
                 if ext in [".jpg", ".jpeg"] and quality > 20:
                     quality -= 5
@@ -134,18 +125,12 @@ def _setup_temp_directory(video_file_path, settings, logger):
     if settings.temp_dir:
         video_basename = os.path.splitext(os.path.basename(video_file_path))[0]
         temp_dir = os.path.join(settings.temp_dir, f"movieprint_temp_{video_basename}")
-        if not os.path.exists(temp_dir):
-            try:
-                os.makedirs(temp_dir)
-            except OSError as e:
-                return None, False, f"Error creating temp sub-dir {temp_dir}: {e}"
-        return temp_dir, False, None  # Don't cleanup user-provided dir
+        os.makedirs(temp_dir, exist_ok=True)
+        return temp_dir, False, None
     else:
         try:
-            # Create a unique temp dir to avoid collisions
             temp_dir = tempfile.mkdtemp(prefix=f"movieprint_{os.path.splitext(os.path.basename(video_file_path))[0]}_")
-            logger.debug(f"  Using temporary directory for frames: {temp_dir}")
-            return temp_dir, True, None  # Cleanup this dir
+            return temp_dir, True, None
         except Exception as e:
             return None, False, f"Error creating temporary directory: {e}"
 
@@ -157,17 +142,18 @@ def _get_video_duration(video_path, logger):
             fps = cap.get(cv2.CAP_PROP_FPS)
             count = cap.get(cv2.CAP_PROP_FRAME_COUNT)
             cap.release()
-            if fps > 0:
-                return count / fps
+            if fps > 0: return count / fps
     except Exception as e:
         logger.warning(f"Could not determine duration for {video_path}: {e}")
     return 0.0
 
 def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, logger, fast_preview=False):
-    """
-    Orchestrates frame extraction based on layout and extraction modes.
-    """
+    """Orchestrates frame extraction based on layout and extraction modes."""
     
+    # HDR Settings
+    hdr_tonemap = getattr(settings, 'hdr_tonemap', False)
+    hdr_algo = getattr(settings, 'hdr_algorithm', 'hable')
+
     # 1. Manual Timestamps (from Scrubbing/GUI)
     if hasattr(settings, 'manual_timestamps') and settings.manual_timestamps:
         logger.info(f"  Using {len(settings.manual_timestamps)} manual timestamps provided by GUI.")
@@ -177,11 +163,12 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
             output_folder=temp_dir, 
             logger=logger, 
             output_format=settings.frame_format,
-            fast_preview=fast_preview
+            fast_preview=fast_preview,
+            hdr_tonemap=hdr_tonemap,
+            hdr_algorithm=hdr_algo
         )
 
     # 2. Grid Mode (Calculated Timestamps)
-    # If it's a Grid, calculate timestamps directly to ensure we get exactly Rows*Cols frames.
     if settings.layout_mode == "grid" and getattr(settings, 'columns', None) and getattr(settings, 'rows', None):
         logger.info("  Layout is Grid: Calculating exact timestamps for extraction.")
         
@@ -197,7 +184,9 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
                 output_folder=temp_dir, 
                 logger=logger, 
                 output_format=settings.frame_format,
-                fast_preview=fast_preview
+                fast_preview=fast_preview,
+                hdr_tonemap=hdr_tonemap,
+                hdr_algorithm=hdr_algo
             )
 
     # 3. Interval or Shot Mode (Fallback/Legacy)
@@ -211,9 +200,16 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
             start_time_sec=start_sec, end_time_sec=end_sec,
             use_gpu=use_gpu,
             fast_preview=fast_preview,
-            logger=logger
+            logger=logger,
+            hdr_tonemap=hdr_tonemap,
+            hdr_algorithm=hdr_algo
         )
     elif settings.extraction_mode == "shot":
+        # Note: HDR tone mapping not currently supported for shot detection extraction
+        # as it uses PySceneDetect/OpenCV directly.
+        if hdr_tonemap:
+            logger.warning("  [Limit] HDR Tone Mapping is not yet supported in Shot Extraction mode. Output may look washed out.")
+        
         return video_processing.extract_shot_boundary_frames(
             video_path=video_file_path, output_folder=temp_dir,
             output_format=settings.frame_format, detector_threshold=settings.shot_threshold,
@@ -230,30 +226,14 @@ def _apply_exclusions(metadata_list, settings, logger):
 
     if settings.extraction_mode == 'interval' and settings.exclude_frames:
         exclude_set = set(settings.exclude_frames)
-        original_frames = {item['frame_number'] for item in metadata_list}
-        not_found = exclude_set - original_frames
-        
-        if not_found:
-            msg = f"  Warning: Requested frames to exclude not found: {sorted(list(not_found))}"
-            logger.warning(msg)
-            excluded_items_log.append(msg)
-            
         metadata_list = [item for item in metadata_list if item['frame_number'] not in exclude_set]
-        if len(metadata_list) < initial_count:
-            excluded_items_log.extend([f"excluded_frame_num:{fn}" for fn in exclude_set if fn in original_frames])
 
     elif settings.extraction_mode == 'shot' and settings.exclude_shots:
         exclude_set_0based = {idx - 1 for idx in settings.exclude_shots}
-        temp_list = []
-        for i, item in enumerate(metadata_list):
-            if i not in exclude_set_0based:
-                temp_list.append(item)
-            else:
-                pass 
-        metadata_list = temp_list
+        metadata_list = [item for i, item in enumerate(metadata_list) if i not in exclude_set_0based]
 
     if len(metadata_list) < initial_count:
-        logger.info(f"  Applied exclusions: {initial_count - len(metadata_list)} thumbnails removed. {len(metadata_list)} remaining.")
+        logger.info(f"  Applied exclusions: {initial_count - len(metadata_list)} thumbnails removed.")
 
     return metadata_list, excluded_items_log
 
@@ -265,8 +245,7 @@ def _limit_frames_for_grid(metadata_list, settings, temp_dir, cleanup_temp, logg
 
     num_to_select = settings.max_frames_for_print
     original_count = len(metadata_list)
-    logger.info(f"  Limiting {original_count} extracted frames to max {num_to_select}.")
-
+    
     indices_to_pick = [int(i * (original_count - 1) / (num_to_select - 1)) for i in range(num_to_select)]
     if num_to_select == 1 and original_count > 0:
         indices_to_pick = [0]
@@ -278,8 +257,7 @@ def _limit_frames_for_grid(metadata_list, settings, temp_dir, cleanup_temp, logg
         all_temp_paths = glob.glob(os.path.join(temp_dir, f"*.{settings.frame_format}"))
         for path in all_temp_paths:
             if path not in frames_to_keep_paths:
-                try:
-                    os.remove(path)
+                try: os.remove(path)
                 except OSError: pass
 
     return selected_metadata
@@ -288,42 +266,33 @@ def _process_thumbnails(metadata_list, settings, logger):
     """Applies Face Detection and Rotation."""
     
     # 1. Face Detection
-    face_cascade = None
     if settings.detect_faces:
         cascade_path = settings.haar_cascade_xml or os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
-        if not os.path.exists(cascade_path):
-            logger.warning(f"  Haar Cascade not found at '{cascade_path}'. Skipping detection.")
-        else:
+        if os.path.exists(cascade_path):
             face_cascade = cv2.CascadeClassifier(cascade_path)
-            if face_cascade.empty():
-                logger.warning(f"  Failed to load Haar Cascade. Skipping detection.")
-                face_cascade = None
-
-    if face_cascade:
-        logger.info("  Performing face detection...")
-        for meta in metadata_list:
-            try:
-                frame_img = cv2.imread(meta['frame_path'])
-                if frame_img is None: continue
-                gray = cv2.cvtColor(frame_img, cv2.COLOR_BGR2GRAY)
-                faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(20, 20))
-                meta['face_detection'] = {'num_faces': len(faces), 'face_bboxes_thumbnail': [list(f) for f in faces]}
-            except Exception as e:
-                logger.error(f"    Face detection error {meta['frame_path']}: {e}")
+            if not face_cascade.empty():
+                logger.info("  Performing face detection...")
+                for meta in metadata_list:
+                    try:
+                        frame_img = cv2.imread(meta['frame_path'])
+                        if frame_img is None: continue
+                        gray = cv2.cvtColor(frame_img, cv2.COLOR_BGR2GRAY)
+                        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(20, 20))
+                        meta['face_detection'] = {'num_faces': len(faces), 'face_bboxes_thumbnail': [list(f) for f in faces]}
+                    except Exception: pass
 
     # 2. Rotation
     if settings.rotate_thumbnails != 0:
-        logger.info(f"  Rotating thumbnails by {settings.rotate_thumbnails}°...")
         rot_flag = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(settings.rotate_thumbnails)
         if rot_flag is not None:
+            logger.info(f"  Rotating thumbnails by {settings.rotate_thumbnails}°...")
             for meta in metadata_list:
                 try:
                     thumb_img = cv2.imread(meta['frame_path'])
                     if thumb_img is None: continue
                     rotated = cv2.rotate(thumb_img, rot_flag)
                     cv2.imwrite(meta['frame_path'], rotated)
-                except Exception as e:
-                    logger.error(f"    Rotation error {meta['frame_path']}: {e}")
+                except Exception: pass
 
     return metadata_list
 
@@ -338,8 +307,6 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
 
     if not items_for_grid:
         return False, None, "No frames available for grid generation."
-
-    logger.info(f"  Generating layout with {len(items_for_grid)} items...")
 
     grid_params = {
         'image_source_data': items_for_grid, 
@@ -377,18 +344,15 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
         })
 
     success, layout_data = image_grid.create_image_grid(**grid_params)
-    if not success:
-        return False, None, "Image generation failed."
+    if not success: return False, None, "Image generation failed."
 
     logger.info(f"  MoviePrint successfully saved to {output_path}")
     return True, layout_data, None
 
 def _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, process_warnings, movieprint_path, logger):
     """Saves metadata JSON. STRICTLY DISABLED if save_metadata_json is False."""
-    if not getattr(settings, 'save_metadata_json', False):
-        return
+    if not getattr(settings, 'save_metadata_json', False): return
 
-    logger.info("  Generating metadata JSON...")
     source_map = {meta['frame_path']: meta for meta in metadata_list}
     combined_thumb_meta = []
     
@@ -396,9 +360,8 @@ def _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, pro
         source_meta = source_map.get(layout_item['image_path'])
         if source_meta:
             final_meta = {k: source_meta.get(k) for k in [
-                'video_filename', 'frame_number', 'timestamp_sec', 'timecode',
-                'start_frame', 'end_frame', 'duration_frames',
-                'face_detection', 'rotation_error'
+                'video_filename', 'frame_number', 'timestamp_sec', 
+                'duration_frames', 'face_detection'
             ] if source_meta.get(k) is not None}
             final_meta['layout_in_movieprint'] = {k: layout_item[k] for k in ['x', 'y', 'width', 'height']}
             combined_thumb_meta.append(final_meta)
@@ -414,20 +377,15 @@ def _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, pro
     
     json_path = os.path.splitext(movieprint_path)[0] + ".json"
     try:
-        with open(json_path, 'w') as f:
-            json.dump(full_meta, f, indent=4)
+        with open(json_path, 'w') as f: json.dump(full_meta, f, indent=4)
         logger.info(f"  Metadata JSON saved to {json_path}")
-    except Exception as e:
-        logger.error(f"  Error saving metadata JSON: {e}")
+    except Exception as e: logger.error(f"  Error saving metadata JSON: {e}")
 
 def process_single_video(video_file_path, settings, effective_output_filename, logger, fast_preview=False):
-    """
-    Main pipeline for processing a single video file.
-    Always saves output ALONGSIDE the video file path.
-    """
+    """Main pipeline for processing a single video file."""
     logger.info(f"\nProcessing video: {video_file_path}...")
 
-    # 1. Path Resolution: ALWAYS save alongside.
+    # 1. Path Resolution
     target_output_dir = os.path.dirname(os.path.abspath(video_file_path))
     if not os.access(target_output_dir, os.W_OK):
         return False, f"Cannot write to source directory: {target_output_dir}. Permission denied."
@@ -443,8 +401,7 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
 
     # 3. Setup Temp
     temp_dir, cleanup_temp, error = _setup_temp_directory(video_file_path, settings, logger)
-    if error:
-        return False, error
+    if error: return False, error
 
     try:
         # 4. Extraction
@@ -459,15 +416,12 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
         metadata_list = _limit_frames_for_grid(metadata_list, settings, temp_dir, cleanup_temp, logger)
         metadata_list = _process_thumbnails(metadata_list, settings, logger)
 
-        # 6. File Determination
+        # 6. Generation
         final_path = os.path.join(target_output_dir, effective_output_filename)
-        
-        # 7. Generation
         success, layout_data, error_msg = _generate_movieprint(metadata_list, settings, final_path, logger)
-        if not success:
-            return False, error_msg
+        if not success: return False, error_msg
 
-        # 8. Post-Processing
+        # 7. Post-Processing
         enforce_max_filesize(final_path, settings.max_output_filesize_kb, logger)
         if getattr(settings, 'save_metadata_json', False):
             _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, process_warnings, final_path, logger)
@@ -476,15 +430,11 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
 
     finally:
         if cleanup_temp and os.path.exists(temp_dir):
-            try:
-                shutil.rmtree(temp_dir)
-                logger.debug(f"  Cleaned up temp directory: {temp_dir}")
+            try: shutil.rmtree(temp_dir)
             except Exception: pass
 
 def execute_movieprint_generation(settings, logger, progress_callback=None, fast_preview=False):
-    """
-    Entry point for batch processing.
-    """
+    """Entry point for batch processing."""
     logger.info("Starting PyMoviePrint generation process...")
 
     video_files_to_process = discover_video_files(
@@ -500,13 +450,14 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
 
     successful_ops = []
     failed_ops = []
+    total_videos = len(video_files_to_process)
 
-    # Determine Format
+    # Determine Format (Default jpg)
     output_print_format = "jpg"
     if hasattr(settings, 'frame_format') and settings.frame_format.lower() in ['jpg', 'png']:
         output_print_format = settings.frame_format.lower()
 
-    # Handle implicit extension changes from custom name
+    # Handle custom filename extension override
     if getattr(settings, 'output_naming_mode', 'suffix') == 'custom':
         custom_name = getattr(settings, 'output_filename', '').strip()
         if custom_name:
@@ -515,22 +466,15 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
                 output_print_format = ext.lower().replace('.', '').replace('jpeg','jpg')
                 settings.output_filename = os.path.splitext(custom_name)[0]
 
-    total_videos = len(video_files_to_process)
-    
     for i, video_path in enumerate(video_files_to_process):
-        if progress_callback:
-            progress_callback(i, total_videos, video_path)
+        if progress_callback: progress_callback(i, total_videos, video_path)
 
-        # --- Naming Scheme Logic ---
-        effective_output_name = ""
+        # Naming Logic
         naming_mode = getattr(settings, 'output_naming_mode', 'suffix')
-
         if naming_mode == 'custom' and getattr(settings, 'output_filename', ''):
-            # Mode: Fixed Custom Name
             base_name = settings.output_filename
             effective_output_name = f"{base_name}.{output_print_format}"
         else:
-            # Mode: Suffix (Default)
             base = os.path.splitext(os.path.basename(video_path))[0]
             suffix = getattr(settings, 'output_filename_suffix', '_movieprint')
             effective_output_name = f"{base}{suffix}.{output_print_format}"
@@ -539,17 +483,13 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
             success, message_or_path = process_single_video(
                 video_path, settings, effective_output_name, logger, fast_preview=fast_preview
             )
-            if success:
-                successful_ops.append({'video': video_path, 'output': message_or_path})
-            else:
-                failed_ops.append({'video': video_path, 'reason': message_or_path})
+            if success: successful_ops.append({'video': video_path, 'output': message_or_path})
+            else: failed_ops.append({'video': video_path, 'reason': message_or_path})
         except Exception as e:
-            logger.exception(f"CRITICAL UNHANDLED ERROR processing {video_path}: {e}")
-            failed_ops.append({'video': video_path, 'reason': f"Critical error: {str(e)}"})
+            logger.exception(f"CRITICAL ERROR processing {video_path}: {e}")
+            failed_ops.append({'video': video_path, 'reason': str(e)})
 
-    if progress_callback:
-        progress_callback(total_videos, total_videos, "Batch completed")
-
+    if progress_callback: progress_callback(total_videos, total_videos, "Batch completed")
     return successful_ops, failed_ops
 
 def main():
@@ -562,10 +502,9 @@ def main():
     parser.add_argument("input_paths", nargs='+', help="Video files or directories.")
     
     # Naming
-    parser.add_argument("--naming_mode", type=str, default="suffix", choices=["suffix", "custom"], dest="output_naming_mode",
-                        help="Naming strategy: 'suffix' (default) or 'custom' (fixed name).")
-    parser.add_argument("--output_filename_suffix", type=str, default="_movieprint", help="Suffix for filenames (only in suffix mode).")
-    parser.add_argument("--output_filename", type=str, default=None, help="Specific filename (required for custom mode).")
+    parser.add_argument("--naming_mode", type=str, default="suffix", choices=["suffix", "custom"], dest="output_naming_mode")
+    parser.add_argument("--output_filename_suffix", type=str, default="_movieprint")
+    parser.add_argument("--output_filename", type=str, default=None)
 
     # Batch
     batch_grp = parser.add_argument_group("Batch Processing")
@@ -602,7 +541,7 @@ def main():
     style_grp.add_argument("--background_color", type=str, default="#FFFFFF")
     style_grp.add_argument("--frame_format", type=str, default="jpg", choices=["jpg", "png"])
     style_grp.add_argument("--temp_dir", type=str, default=None)
-    style_grp.add_argument("--save_metadata_json", action="store_true", help="Enable JSON metadata export.")
+    style_grp.add_argument("--save_metadata_json", action="store_true")
     style_grp.add_argument("--detect_faces", action="store_true")
     style_grp.add_argument("--haar_cascade_xml", type=str, default=None)
     style_grp.add_argument("--rotate_thumbnails", type=int, default=0, choices=[0, 90, 180, 270])
@@ -610,6 +549,10 @@ def main():
     style_grp.add_argument("--use_gpu", action="store_true")
     style_grp.add_argument("--fast", "--draft", action="store_true", dest="fast_preview")
     style_grp.add_argument("--output_quality", type=int, default=95)
+    
+    # HDR / Color
+    style_grp.add_argument("--hdr_tonemap", action="store_true")
+    style_grp.add_argument("--hdr_algorithm", type=str, default="hable")
     
     # Frame Info / OSD
     style_grp.add_argument("--show_header", action="store_true", default=False)
@@ -629,10 +572,9 @@ def main():
     args = parser.parse_args()
 
     # Validation
-    if args.extraction_mode == "interval":
-        if args.interval_seconds is None and args.interval_frames is None:
-            if not (args.layout_mode == 'grid' and args.rows and args.columns):
-                 parser.error("Interval mode requires --interval_seconds or --interval_frames.")
+    if args.extraction_mode == "interval" and args.interval_seconds is None and args.interval_frames is None:
+        if not (args.layout_mode == 'grid' and args.rows and args.columns):
+             parser.error("Interval mode requires --interval_seconds or --interval_frames.")
 
     successful_ops, failed_ops = execute_movieprint_generation(
         settings=args,
@@ -642,8 +584,7 @@ def main():
     )
 
     logger.info("\n--- Processing Summary ---")
-    if successful_ops:
-        logger.info(f"Success: {len(successful_ops)}")
+    if successful_ops: logger.info(f"Success: {len(successful_ops)}")
     if failed_ops:
         logger.info(f"Failed: {len(failed_ops)}")
         for f in failed_ops: logger.info(f" - {f['video']}: {f['reason']}")
