@@ -205,8 +205,6 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
             hdr_algorithm=hdr_algo
         )
     elif settings.extraction_mode == "shot":
-        # Note: HDR tone mapping not currently supported for shot detection extraction
-        # as it uses PySceneDetect/OpenCV directly.
         if hdr_tonemap:
             logger.warning("  [Limit] HDR Tone Mapping is not yet supported in Shot Extraction mode. Output may look washed out.")
         
@@ -328,7 +326,11 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
         'frame_info_position': settings.frame_info_position,
         'frame_info_size': settings.frame_info_size,
         'frame_info_margin': settings.frame_info_margin,
-        'quality': getattr(settings, 'output_quality', 95)
+        'quality': getattr(settings, 'output_quality', 95),
+        # NEW PARAMS
+        'fit_to_output_params': getattr(settings, 'fit_to_output_params', False),
+        'output_width': getattr(settings, 'output_width', 1920),
+        'output_height': getattr(settings, 'output_height', 1080)
     }
     
     if settings.layout_mode == "grid":
@@ -437,6 +439,7 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
     """Entry point for batch processing."""
     logger.info("Starting PyMoviePrint generation process...")
 
+    # 1. Discover Files (Recursive support via settings)
     video_files_to_process = discover_video_files(
         settings.input_paths,
         getattr(settings, 'video_extensions', ".mp4,.avi,.mov,.mkv,.flv,.wmv"),
@@ -466,10 +469,13 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
                 output_print_format = ext.lower().replace('.', '').replace('jpeg','jpg')
                 settings.output_filename = os.path.splitext(custom_name)[0]
 
+    # Mode for overwriting
+    overwrite_mode = getattr(settings, 'overwrite_mode', 'overwrite')
+
     for i, video_path in enumerate(video_files_to_process):
         if progress_callback: progress_callback(i, total_videos, video_path)
 
-        # Naming Logic
+        # Naming Logic (Calculated early for skip check)
         naming_mode = getattr(settings, 'output_naming_mode', 'suffix')
         if naming_mode == 'custom' and getattr(settings, 'output_filename', ''):
             base_name = settings.output_filename
@@ -478,6 +484,14 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
             base = os.path.splitext(os.path.basename(video_path))[0]
             suffix = getattr(settings, 'output_filename_suffix', '_movieprint')
             effective_output_name = f"{base}{suffix}.{output_print_format}"
+
+        # 2. Skip Check
+        target_dir = os.path.dirname(os.path.abspath(video_path))
+        full_output_path = os.path.join(target_dir, effective_output_name)
+        
+        if overwrite_mode == 'skip' and os.path.exists(full_output_path):
+            logger.info(f"Skipping {video_path} (Output exists: {effective_output_name})")
+            continue
 
         try:
             success, message_or_path = process_single_video(
@@ -505,11 +519,12 @@ def main():
     parser.add_argument("--naming_mode", type=str, default="suffix", choices=["suffix", "custom"], dest="output_naming_mode")
     parser.add_argument("--output_filename_suffix", type=str, default="_movieprint")
     parser.add_argument("--output_filename", type=str, default=None)
+    parser.add_argument("--overwrite_mode", type=str, default="overwrite", choices=["overwrite", "skip"], help="Action if output file exists.")
 
     # Batch
     batch_grp = parser.add_argument_group("Batch Processing")
     batch_grp.add_argument("--video_extensions", type=str, default=".mp4,.avi,.mov,.mkv,.flv,.wmv")
-    batch_grp.add_argument("--recursive_scan", action="store_true")
+    batch_grp.add_argument("--recursive_scan", action="store_true", help="Recursively scan directories.")
 
     # Time
     time_grp = parser.add_argument_group("Time Segment")
@@ -533,7 +548,11 @@ def main():
     lay_grp.add_argument("--target_thumbnail_width", type=int, default=None)
     lay_grp.add_argument("--max_frames_for_print", type=int, default=None)
     lay_grp.add_argument("--target_row_height", type=int, default=100)
-    lay_grp.add_argument("--output_image_width", type=int, default=1200)
+    
+    # NEW: Dimensions
+    lay_grp.add_argument("--fit_to_output_params", action="store_true")
+    lay_grp.add_argument("--output_width", type=int, default=1920)
+    lay_grp.add_argument("--output_height", type=int, default=1080)
 
     # Styling & Misc
     style_grp = parser.add_argument_group("Styling & Misc")

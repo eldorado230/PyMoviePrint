@@ -1,166 +1,207 @@
-# PyMoviePrint User Guide
+PyMoviePrint
 
-## Introduction
+PyMoviePrint is a Python application that creates "movie prints" (also known as contact sheets, thumbnail indexes, or storyboards) from your video files. It bridges the gap between simple screenshot tools and professional video analysis software.
 
-Welcome to the PyMoviePrint User Guide. This guide provides detailed instructions on how to use PyMoviePrint, a Python application for creating "movie prints" (contact sheets or thumbnail indexes) from your video files.
+It offers both a Graphical User Interface (GUI) for ease of use and a Command-Line Interface (CLI) for scripting and batch processing.
 
-## Table of Contents
+Current version: 1.0.0
 
-1.  [Features](#features)
-2.  [Setup and Installation](#setup-and-installation)
-3.  [Using the Graphical User Interface (GUI)](#using-the-graphical-user-interface-gui)
-    *   [Running the GUI](#running-the-gui)
-    *   [Main Window Overview](#main-window-overview)
-    *   [Input/Output Section](#inputoutput-section)
-    *   [Extraction & Segment Tab](#extraction--segment-tab)
-    *   [Layout Tab](#layout-tab)
-    *   [Thumbnail Preview Tab](#thumbnail-preview-tab)
-    *   [Batch & Output Tab](#batch--output-tab)
-    *   [Common & Advanced Tab](#common--advanced-tab)
-    *   [Generating a MoviePrint](#generating-a-movieprint)
-4.  [Using the Command-Line Interface (CLI)](#using-the-command-line-interface-cli)
-    *   [Basic Usage](#basic-usage)
-    *   [Command-Line Options](#command-line-options)
-    *   [Examples](#examples)
-5.  [Troubleshooting](#troubleshooting)
-6.  [Contributing](#contributing)
+Features
 
-## Features
+Dual Interface:
 
-PyMoviePrint offers a rich set of features for creating customized movie prints:
+GUI: Modern, dark-themed interface with Live Preview, Scrubbing (drag to find the perfect frame), and Drag-and-Drop.
 
-*   **Graphical User Interface (GUI)**: An intuitive interface for interactive operation.
-*   **Command-Line Interface (CLI)**: For scripting, automation, and batch processing.
-*   **Frame Extraction Modes**:
-    *   **Interval Mode**: Extract frames at regular time or frame intervals.
-    *   **Shot Detection Mode**: Use PySceneDetect to extract frames at detected shot boundaries.
-*   **Time Segmentation**: Specify custom start and end times for processing videos.
-*   **Frame/Shot Exclusion**: Exclude specific frames or shots from your movie print.
-*   **Layout Modes**:
-    *   **Grid Layout**: Arrange thumbnails in a standard grid.
-    *   **Timeline Layout**: Arrange thumbnails proportionally to shot duration.
-*   **Customization**: Adjust padding, background color, thumbnail rotation, and more.
-*   **Batch Processing**: Process multiple video files or entire directories at once.
-*   **Metadata**: Save detailed information about the generation process to a JSON file.
-*   **And more**: Face detection, custom temporary directories, file size targeting, and persistent GUI settings.
+CLI: Full automation support for batch processing servers or scripts.
 
-## Setup and Installation
+Smart Layouts:
 
-1.  **Python Version**: Python 3.8 or newer is recommended.
+Grid: Standard rows and columns (e.g., 5x5).
 
-2.  **Create a Virtual Environment** (Recommended):
-    ```bash
-    python -m venv .venv
-    ```
-    Activate the virtual environment:
-    *   On Windows:
-        ```bash
-        .venv\Scripts\activate
-        ```
-    *   On macOS/Linux:
-        ```bash
-        source .venv/bin/activate
-        ```
+Timeline: Thumbnails vary in width based on shot duration (requires Shot Detection).
 
-3.  **Install Dependencies**:
-    ```bash
-    pip install -r requirements.txt
-    ```
+Smart Fitting: Force the final image to exact dimensions (e.g., 1920x1080) regardless of grid size.
 
-## Using the Graphical User Interface (GUI)
+Intelligent Extraction:
 
-### Running the GUI
+Interval Mode: Capture frames every X seconds or N frames.
 
-To run the GUI, execute the following command in your terminal:
-```bash
+Shot Detection: Uses PySceneDetect to automatically find cuts and extract the main frame of every scene.
+
+HDR to SDR Tone Mapping:
+
+Automatically detects HDR (High Dynamic Range) content and tone-maps it to SDR so colors don't look washed out. Supports algorithms: hable, reinhard, mobius.
+
+Visual Customization:
+
+Styling: Rounded corners, custom padding, background colors, and rotation.
+
+Info Overlays: Overlay Timecodes, Frame Numbers, or file metadata headers directly onto the image.
+
+Performance:
+
+GPU Acceleration: Supports NVIDIA CUDA (NVDEC) for fast decoding (requires compatible FFmpeg).
+
+Batch Processing: Recursive directory scanning with overwrite protection (skip existing files).
+
+Installation
+
+Prerequisites
+
+Python 3.8+
+
+FFmpeg: Must be installed and in your system PATH.
+
+Optional: For GPU support, use an FFmpeg build with --enable-cuda-nvcc.
+
+Optional: For HDR tone mapping, use an FFmpeg build with --enable-libzimg.
+
+Setup
+
+# 1. Create virtual environment
+python -m venv .venv
+
+# 2. Activate it
+# Windows:
+.venv\Scripts\activate
+# Mac/Linux:
+source .venv/bin/activate
+
+# 3. Install dependencies
+pip install -r requirements.txt
+
+
+Usage
+
+Graphical Interface (GUI)
+
+Run the application:
+
 python movieprint_gui.py
-```
 
-### Main Window Overview
 
-The main window is divided into several sections:
-*   **Input/Output Section**: For selecting video files and the output directory.
-*   **Tabs Section**: For configuring extraction, layout, and other settings.
-*   **Action/Log Section**: For starting the generation process and viewing logs.
+Preview: Drag a video in, click "Preview".
 
-### Input/Output Section
+Scrub: Click and drag on any thumbnail in the preview to change that specific frame.
 
-*   **Video File(s) / Dir**: Select one or more video files, or a single directory containing videos. You can also drag and drop files or directories onto this field.
-*   **Output Directory**: Choose the directory where the generated movie prints will be saved.
+Save: Click "Apply / Save" to render the high-quality output.
 
-### Extraction & Segment Tab
+Command-Line Interface (CLI)
 
-*   **Extraction Mode**: Choose between `interval` and `shot` mode.
-*   **Interval (seconds/frames)**: Set the time or frame interval for `interval` mode.
-*   **Shot Threshold**: Adjust the sensitivity for `shot` mode.
-*   **Start/End Time**: Specify a segment of the video to process.
-*   **Exclude Frames/Shots**: List frame numbers or shot indices to exclude.
+The CLI is ideal for automation.
 
-### Layout Tab
+Basic Grid (5x5)
 
-*   **Layout Mode**: Choose between `grid` and `timeline` layout.
-*   **Max Frames for Print**: Set a target maximum number of frames for the movie print.
-*   **Grid Options**: Configure the number of columns, rows, and thumbnail width for `grid` layout.
-*   **Timeline Options**: Configure the row height and output image width for `timeline` layout.
+python movieprint_maker.py input.mp4 ./output --columns 5 --rows 5
 
-### Thumbnail Preview Tab
 
-*   **Preview Extracted Thumbnails**: Click this button to generate a preview of the thumbnails based on the current settings.
+Shot Detection with Timecodes
 
-### Batch & Output Tab
+python movieprint_maker.py input.mp4 ./output --extraction_mode shot --frame_info_show
 
-*   **Output Filename**: Specify a filename for a single input file.
-*   **Output Suffix**: Set a suffix for filenames in batch mode.
-*   **Video Extensions**: Define the video file extensions to look for when scanning directories.
-*   **Recursive Directory Scan**: Scan directories recursively for video files.
 
-### Common & Advanced Tab
+Wallpaper Mode (Fixed 1920x1080 Output)
 
-*   **Padding**: Set the padding around and between thumbnails.
-*   **Background Color**: Choose a background color for the movie print.
-*   **Frame Format**: Select the format for temporary extracted frames (jpg or png).
-*   **Rotate Thumbnails**: Rotate all thumbnails by a specified angle.
-*   **Custom Temp Directory**: Specify a directory for temporary frames.
-*   **Haar Cascade XML**: Provide a custom Haar Cascade XML file for face detection.
-*   **Save Metadata JSON**: Save a JSON file with detailed metadata.
-*   **Detect Faces**: Enable face detection on thumbnails.
-*   **Max Output Filesize (KB)**: Set a target maximum file size for the output image.
-*   **Reset All Settings to Defaults**: Reset all settings to their default values.
+python movieprint_maker.py input.mp4 ./output --fit_to_output_params --output_width 1920 --output_height 1080
 
-### Generating a MoviePrint
 
-Once you have configured all the settings, click the **Generate MoviePrint** button to start the process.
+Batch Process a Folder (Recursive)
 
-## Using the Command-Line Interface (CLI)
+python movieprint_maker.py ./my_collection ./output --recursive_scan --overwrite_mode skip
 
-### Basic Usage
 
-The basic structure of a CLI command is as follows:
-```bash
-python movieprint_maker.py <input_paths...> <output_dir> [options]
-```
+CLI Options Reference
 
-### Command-Line Options
+Input/Output
 
-For a full list of command-line options, please refer to the `README.md` file.
+input_paths: Video files or directories.
 
-### Examples
+output_dir: Directory for saved images.
 
-*   **Simple grid (5 columns) for a single video, extracting every 10 seconds**:
-    ```bash
-    python movieprint_maker.py my_video.mp4 ./output --columns 5 --interval_seconds 10
-    ```
+--naming_mode {suffix,custom}: Naming strategy. Default: suffix.
 
-*   **Timeline layout using shot detection, with a target row height of 120px**:
-    ```bash
-    python movieprint_maker.py movie.mov ./output --extraction_mode shot --layout_mode timeline --target_row_height 120
-    ```
+--output_filename_suffix: Text appended to filename.
 
-## Troubleshooting
+--output_filename: Custom filename (used if naming_mode is 'custom').
 
-*   **GUI does not start**: Ensure you have installed all the dependencies from `requirements.txt`.
-*   **No frames extracted**: Check that the video file is not corrupted and that the start and end times are set correctly.
+--overwrite_mode {overwrite,skip}: Action if output file exists.
 
-## Contributing
+Batch
 
-Contributions are welcome! Please fork the repository, make your changes on a separate branch, and submit a pull request.
+--video_extensions: Comma-separated list (default: .mp4,.avi,.mov,.mkv,.flv,.wmv).
+
+--recursive_scan: Scan directories recursively.
+
+Extraction
+
+--extraction_mode {interval,shot}: Default interval.
+
+--interval_seconds: Seconds between frames.
+
+--interval_frames: Frames between captures.
+
+--shot_threshold: Sensitivity for shot detection (Default: 27.0).
+
+--start_time, --end_time: Time range to process.
+
+Layout
+
+--layout_mode {grid,timeline}: Default grid.
+
+--columns, --rows: Grid dimensions.
+
+--target_thumbnail_width: Force a specific width (px) per thumbnail.
+
+--target_row_height: Height for timeline rows.
+
+--fit_to_output_params: Force the final image to match output_width/height.
+
+--output_width: Target image width (default: 1920).
+
+--output_height: Target image height (default: 1080).
+
+Styling & Visuals
+
+--padding: Pixels between images.
+
+--grid_margin: Outer margin of the image.
+
+--background_color: Hex color (e.g., #FFFFFF).
+
+--rounded_corners: Radius for corner rounding (0 = square).
+
+--rotate_thumbnails {0,90,180,270}: Rotation degrees.
+
+--detect_faces: Enable Haar Cascade face detection.
+
+--show_header: Show a header bar with file info at the top.
+
+--output_quality: JPEG Quality (1-100). Default: 95.
+
+--max_output_filesize_kb: Attempt to reduce quality to meet target KB size.
+
+Frame Info / OSD
+
+--frame_info_show: Enable text overlay on thumbnails.
+
+--frame_info_timecode_or_frame {timecode,frame}: content to display.
+
+--frame_info_position {top_left,top_right,bottom_left,bottom_right}.
+
+--frame_info_font_color: Hex color.
+
+--frame_info_bg_color: Hex color for text background box.
+
+HDR & Performance
+
+--hdr_tonemap: Enable HDR to SDR conversion.
+
+--hdr_algorithm {hable,reinhard,mobius}: Tone mapping algorithm.
+
+--use_gpu: Attempt to use hardware acceleration (CUDA).
+
+--temp_dir: Custom directory for extracted frames.
+
+License
+
+MIT License

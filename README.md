@@ -23,11 +23,14 @@ Current version: **1.0.0**
 * **Layout Modes**:
     * **Grid Layout**: Arranges thumbnails in a standard grid.
     * **Timeline Layout**: Arranges thumbnails proportionally to shot duration (requires shot detection mode).
+    * **Smart Fitting**: Force the final image to specific dimensions (e.g., 1920x1080).
 * **Customization**:
     * **Frame Info / OSD**: Overlay timecodes or frame numbers directly onto thumbnails with customizable position, color, and size.
+    * **Header Info**: Optional header showing file path and processing metadata.
     * **Styling**: Adjustable padding, grid margins, background color, and **rounded corners**.
     * **Rotation**: Rotate thumbnails by 90, 180, or 270 degrees.
 * **Batch Processing**: Process multiple video files or entire directories recursively.
+    * **Overwrite Control**: Choose to skip existing output files or overwrite them.
 * **Naming Control**: Choose between appending suffixes to original filenames or defining custom fixed filenames.
 
 ## Setup / Installation
@@ -79,7 +82,7 @@ Current version: **1.0.0**
     * **Preview**: Click "PREVIEW" to generate a draft.
     * **Scrub**: In the preview window, click and drag left/right on any thumbnail to change the specific timestamp for that cell.
     * **Settings**:
-        * **Layout**: Configure columns, rows, and margins.
+        * **Layout**: Configure columns, rows, margins, and output dimensions.
         * **Advanced**: Set extraction modes, shot thresholds, and naming schemes.
         * **HDR & Color**: Enable tone mapping if your video looks washed out.
     * **Generate**: Click "APPLY / SAVE" to render the full-resolution output.
@@ -110,6 +113,11 @@ The CLI is ideal for automation.
     python movieprint_maker.py clip.mp4 ./output --rounded_corners 15 --padding 10 --frame_info_show --frame_info_position bottom_right
     ```
 
+* **Fixed 1920x1080 Output with Header**:
+    ```bash
+    python movieprint_maker.py clip.mp4 ./output --fit_to_output_params --output_width 1920 --output_height 1080 --show_header
+    ```
+
 ## Command-Line Options (`movieprint_maker.py`)
 
 **Input/Output**:
@@ -118,6 +126,7 @@ The CLI is ideal for automation.
 * `--naming_mode {suffix,custom}`: Naming strategy. Default: `suffix`.
 * `--output_filename_suffix`: Text appended to filename (e.g., `_movieprint`).
 * `--output_filename`: Custom filename (used if naming_mode is 'custom').
+* `--overwrite_mode {overwrite,skip}`: Action if output file exists. Default: `overwrite`.
 
 **Batch**:
 * `--video_extensions`: Comma-separated list (default: `.mp4,.avi,.mov,.mkv,.flv,.wmv`).
@@ -135,6 +144,9 @@ The CLI is ideal for automation.
 * `--columns`, `--rows`: Grid dimensions.
 * `--target_thumbnail_width`: Force a specific width (px) per thumbnail.
 * `--target_row_height`: Height for timeline rows.
+* `--fit_to_output_params`: Force the final image to match output_width/height.
+* `--output_width`: Target image width (default: 1920).
+* `--output_height`: Target image height (default: 1080).
 
 **Styling & Visuals**:
 * `--padding`: Pixels between images.
@@ -143,6 +155,9 @@ The CLI is ideal for automation.
 * `--rounded_corners`: Radius for corner rounding (0 = square).
 * `--rotate_thumbnails {0,90,180,270}`: Rotation degrees.
 * `--detect_faces`: Enable Haar Cascade face detection.
+* `--show_header`: Show a header bar with file info at the top.
+* `--output_quality`: JPEG Quality (1-100). Default: 95.
+* `--max_output_filesize_kb`: Attempt to reduce quality to meet target KB size.
 
 **Frame Info / OSD (On-Screen Display)**:
 * `--frame_info_show`: Enable text overlay on thumbnails.

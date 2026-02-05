@@ -9,11 +9,13 @@ class ProjectSettings:
     """
     # Input
     input_paths: List[str] = field(default_factory=list)
+    recursive_scan: bool = False  # NEW: Scans subdirectories if True
     
     # Naming Scheme
     output_naming_mode: str = "suffix"  # "suffix" or "custom"
     output_filename_suffix: str = "_movieprint"
     output_filename: str = ""
+    overwrite_mode: str = "overwrite" # NEW: "overwrite" or "skip"
 
     # Extraction
     extraction_mode: str = "interval"  # "interval" or "shot"
@@ -27,6 +29,12 @@ class ProjectSettings:
     num_rows: int = 5
     target_row_height: int = 150
     
+    # --- NEW: Output Dimensions & Fitting ---
+    fit_to_output_params: bool = False  # If True, force grid to output_width x output_height
+    output_width: int = 1920
+    output_height: int = 1080
+    # ----------------------------------------
+
     # Processing
     use_gpu: bool = False
     detect_faces: bool = False
