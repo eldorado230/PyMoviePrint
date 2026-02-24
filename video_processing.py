@@ -1,4 +1,9 @@
-import cv2
+try:
+    import cv2
+    CV2_IMPORT_ERROR = None
+except ImportError as import_error:
+    cv2 = None
+    CV2_IMPORT_ERROR = import_error
 import logging
 import os
 import shutil
@@ -20,6 +25,20 @@ except ImportError:
 
 FFMPEG_BIN = 'ffmpeg'
 FFPROBE_BIN = 'ffprobe'
+
+
+def _ensure_cv2_available(logger: Optional[logging.Logger] = None):
+    """Raise a clear runtime error when OpenCV is unavailable."""
+    if cv2 is not None:
+        return
+
+    message = (
+        "OpenCV (cv2) is required for video operations but failed to import. "
+        f"Original error: {CV2_IMPORT_ERROR}"
+    )
+    if logger:
+        logger.error(message)
+    raise RuntimeError(message)
 
 class VideoUtils:
     """Static utilities for system checks and FFmpeg capability probing."""
@@ -114,6 +133,7 @@ class VideoUtils:
 
 class VideoExtractor:
     def __init__(self, video_path: str, logger: Optional[logging.Logger] = None):
+        _ensure_cv2_available(logger)
         self.video_path = video_path
         self.video_filename = os.path.basename(video_path)
         self.logger = logger or logging.getLogger(__name__)
@@ -440,6 +460,7 @@ class VideoExtractor:
 
 # Legacy Wrappers
 def extract_frames_from_timestamps(video_path, timestamps, output_folder, logger, output_format="jpg", fast_preview=False, hdr_tonemap=False, hdr_algorithm='hable'):
+    _ensure_cv2_available(logger)
     """
     Unified entry point for Grid/Manual timestamp extraction.
     Now uses FFmpeg 'Seek & Snap' for ALL videos (SDR and HDR) for consistent performance.
@@ -457,10 +478,12 @@ def extract_frames_from_timestamps(video_path, timestamps, output_folder, logger
         )
 
 def extract_shot_boundary_frames(video_path, output_folder, logger, detector_threshold=27.0, output_format="jpg", start_time_sec=0.0, end_time_sec=None, hdr_tonemap=False, hdr_algorithm='hable'):
+    _ensure_cv2_available(logger)
     with VideoExtractor(video_path, logger) as ex: 
         return True, ex.extract_shots(output_folder, detector_threshold, output_format, hdr_tonemap=hdr_tonemap, hdr_algorithm=hdr_algorithm)
 
 def extract_frames(video_path, output_folder, logger, interval_seconds=None, interval_frames=None, output_format="jpg", start_time_sec=0.0, end_time_sec=None, use_gpu=False, fast_preview=False, hdr_tonemap=False, hdr_algorithm='hable'):
+    _ensure_cv2_available(logger)
     with VideoExtractor(video_path, logger) as ex:
         if not hdr_tonemap and ex.detect_hdr():
              logger.info("  [Auto-Detect] HDR content identified. Enabling Tone Mapping.")

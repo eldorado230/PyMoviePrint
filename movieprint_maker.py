@@ -6,7 +6,12 @@ import tempfile
 import glob
 import json
 import re
-import cv2
+try:
+    import cv2
+    CV2_IMPORT_ERROR = None
+except ImportError as import_error:
+    cv2 = None
+    CV2_IMPORT_ERROR = import_error
 import math
 from version import __version__
 from PIL import Image
@@ -20,6 +25,18 @@ except ImportError as e:
     exit(1)
 
 # --- Helpers ---
+
+
+def _ensure_cv2_available(logger):
+    if cv2 is not None:
+        return
+    message = (
+        "OpenCV (cv2) is required for movieprint generation but failed to import. "
+        f"Original error: {CV2_IMPORT_ERROR}"
+    )
+    logger.error(message)
+    raise RuntimeError(message)
+
 
 def parse_time_to_seconds(time_str):
     """Parses various time formats (HH:MM:SS, MM:SS, SS.ms) into seconds."""
@@ -136,6 +153,7 @@ def _setup_temp_directory(video_file_path, settings, logger):
 
 def _get_video_duration(video_path, logger):
     """Helper to get exact video duration using OpenCV."""
+    _ensure_cv2_available(logger)
     try:
         cap = cv2.VideoCapture(video_path)
         if cap.isOpened():
@@ -437,6 +455,7 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
 
 def execute_movieprint_generation(settings, logger, progress_callback=None, fast_preview=False):
     """Entry point for batch processing."""
+    _ensure_cv2_available(logger)
     logger.info("Starting PyMoviePrint generation process...")
 
     # 1. Discover Files (Recursive support via settings)
