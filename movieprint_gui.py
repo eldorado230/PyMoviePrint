@@ -14,7 +14,7 @@ import time
 import json
 import numpy as np
 from typing import Optional, List, Dict, Any, Tuple, Union
-from PIL import ImageTk, Image, ImageDraw, ImageChops
+from PIL import ImageTk, Image, ImageDraw, ImageChops, ImageOps
 
 # --- DEPENDENCY MANAGEMENT ---
 class DependencyManager:
@@ -285,7 +285,8 @@ class ZoomableCanvas(ctk.CTkFrame):
         resample_filter = Image.Resampling.BILINEAR if self._zoom_level < 1.0 else Image.Resampling.NEAREST
         zoomed_image = self.original_image.resize((new_width, new_height), resample_filter)
         
-        self.photo_image = ImageTk.PhotoImage(zoomed_image)
+        display_image = zoomed_image if zoomed_image.mode in ("RGB", "RGBA", "L") else zoomed_image.convert("RGBA")
+        self.photo_image = ImageTk.PhotoImage(display_image)
         self.canvas.itemconfig(self.image_id, image=self.photo_image)
         self.canvas.configure(scrollregion=self.canvas.bbox("all"))
 
@@ -297,7 +298,8 @@ class ZoomableCanvas(ctk.CTkFrame):
             self.original_image = Image.open(image_path)
             self.app_ref.zoom_level_var.set(1.0)
             self._zoom_level = 1.0
-            self.photo_image = ImageTk.PhotoImage(self.original_image)
+            display_image = self.original_image if self.original_image.mode in ("RGB", "RGBA", "L") else self.original_image.convert("RGBA")
+            self.photo_image = ImageTk.PhotoImage(display_image)
             
             if self.image_id: self.canvas.delete(self.image_id)
             self.image_id = self.canvas.create_image(0, 0, anchor="nw", image=self.photo_image)
