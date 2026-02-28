@@ -261,12 +261,24 @@ class ZoomableCanvas(ctk.CTkFrame):
 
     def on_mouse_wheel(self, event):
         if self.app_ref.is_scrubbing_active(): return
-        scale_factor = 1.1
+        zoom_step = 1.1
         if (event.num == 5 or event.delta < 0):
-            self.canvas.scale("all", event.x, event.y, 1/scale_factor, 1/scale_factor)
+            new_zoom = self._zoom_level / zoom_step
         elif (event.num == 4 or event.delta > 0):
-            self.canvas.scale("all", event.x, event.y, scale_factor, scale_factor)
-        self.canvas.configure(scrollregion=self.canvas.bbox("all"))
+            new_zoom = self._zoom_level * zoom_step
+        else:
+            return
+
+        new_zoom = max(0.1, min(5.0, new_zoom))
+        self.app_ref.zoom_level_var.set(new_zoom)
+        self.set_zoom(new_zoom)
+
+    def canvas_event_to_image_coords(self, event) -> Tuple[float, float]:
+        """Convert a mouse event on the zoomed canvas back to original image coords."""
+        canvas_x = self.canvas.canvasx(event.x)
+        canvas_y = self.canvas.canvasy(event.y)
+        zoom = self._zoom_level if self._zoom_level > 0 else 1.0
+        return canvas_x / zoom, canvas_y / zoom
 
     def set_zoom(self, scale_level: float):
         scale_level = float(scale_level)
@@ -1156,9 +1168,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def start_scrubbing_logic(self, event):
         layout = self.state_manager.get_state().thumbnail_layout_data
         if not layout or not self.preview_zoomable_canvas.original_image: return False
-        canvas = self.preview_zoomable_canvas.canvas
-        canvas_x = canvas.canvasx(event.x)
-        canvas_y = canvas.canvasy(event.y)
+        canvas_x, canvas_y = self.preview_zoomable_canvas.canvas_event_to_image_coords(event)
         for i, thumb_info in enumerate(layout):
             if thumb_info['x'] <= canvas_x <= thumb_info['x'] + thumb_info['width'] and \
                thumb_info['y'] <= canvas_y <= thumb_info['y'] + thumb_info['height']:
