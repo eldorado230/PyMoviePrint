@@ -1,207 +1,278 @@
-PyMoviePrint
+# PyMoviePrint User Guide
 
-PyMoviePrint is a Python application that creates "movie prints" (also known as contact sheets, thumbnail indexes, or storyboards) from your video files. It bridges the gap between simple screenshot tools and professional video analysis software.
+This guide is a practical, end-to-end walkthrough of PyMoviePrint for both GUI users and CLI automation users.
 
-It offers both a Graphical User Interface (GUI) for ease of use and a Command-Line Interface (CLI) for scripting and batch processing.
+- If you are new, read: **Concepts → GUI Quick Workflow → CLI Quick Recipes**.
+- If you are scripting, jump to: **CLI Reference**.
 
-Current version: 1.0.0
+---
 
-Features
+## 1) Concepts You Should Know
 
-Dual Interface:
+### 1.1 Extraction Modes
 
-GUI: Modern, dark-themed interface with Live Preview, Scrubbing (drag to find the perfect frame), and Drag-and-Drop.
+- **Interval**: sample frames periodically (time-based or frame-based).
+- **Shot**: detect scene boundaries and extract representative frames.
 
-CLI: Full automation support for batch processing servers or scripts.
+### 1.2 Layout Modes
 
-Smart Layouts:
+- **Grid**: classic contact sheet with fixed columns (and optional fixed rows).
+- **Timeline**: thumbnails arranged in rows where width can represent shot duration.
 
-Grid: Standard rows and columns (e.g., 5x5).
+### 1.3 Fixed Output vs Dynamic Output
 
-Timeline: Thumbnails vary in width based on shot duration (requires Shot Detection).
+- **Dynamic (default)**: output size grows from source and layout settings.
+- **Fixed output** (`--fit_to_output_params`): force final image dimensions (great for wallpapers, decks, templates).
 
-Smart Fitting: Force the final image to exact dimensions (e.g., 1920x1080) regardless of grid size.
+### 1.4 HDR Handling
 
-Intelligent Extraction:
+PyMoviePrint can detect HDR characteristics and optionally apply tone mapping so outputs don’t look washed out on SDR displays.
 
-Interval Mode: Capture frames every X seconds or N frames.
+---
 
-Shot Detection: Uses PySceneDetect to automatically find cuts and extract the main frame of every scene.
+## 2) Installation & Environment
 
-HDR to SDR Tone Mapping:
+## 2.1 Prerequisites
 
-Automatically detects HDR (High Dynamic Range) content and tone-maps it to SDR so colors don't look washed out. Supports algorithms: hable, reinhard, mobius.
+- Python 3.8+
+- `ffmpeg` and `ffprobe` available in PATH
 
-Visual Customization:
+## 2.2 Install
 
-Styling: Rounded corners, custom padding, background colors, and rotation.
-
-Info Overlays: Overlay Timecodes, Frame Numbers, or file metadata headers directly onto the image.
-
-Performance:
-
-GPU Acceleration: Supports NVIDIA CUDA (NVDEC) for fast decoding (requires compatible FFmpeg).
-
-Batch Processing: Recursive directory scanning with overwrite protection (skip existing files).
-
-Installation
-
-Prerequisites
-
-Python 3.8+
-
-FFmpeg: Must be installed and in your system PATH.
-
-Optional: For GPU support, use an FFmpeg build with --enable-cuda-nvcc.
-
-Optional: For HDR tone mapping, use an FFmpeg build with --enable-libzimg.
-
-Setup
-
-# 1. Create virtual environment
+```bash
 python -m venv .venv
-
-# 2. Activate it
-# Windows:
-.venv\Scripts\activate
-# Mac/Linux:
-source .venv/bin/activate
-
-# 3. Install dependencies
+source .venv/bin/activate    # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
+```
 
+## 2.3 Validate
 
-Usage
+```bash
+ffmpeg -version
+ffprobe -version
+python -c "import cv2, PIL, scenedetect, customtkinter; print('environment ok')"
+```
 
-Graphical Interface (GUI)
+---
 
-Run the application:
+## 3) GUI Workflow
 
+Run:
+
+```bash
 python movieprint_gui.py
+```
 
+### 3.1 Typical Session
 
-Preview: Drag a video in, click "Preview".
+1. Add a single file or queue multiple files/folders.
+2. Set extraction + layout settings.
+3. Click **PREVIEW** to generate a draft.
+4. Scrub thumbnails in preview to refine specific cells.
+5. Apply style overlays, margins, color, HDR settings.
+6. Click **APPLY / SAVE** for full output render.
 
-Scrub: Click and drag on any thumbnail in the preview to change that specific frame.
+### 3.2 Scrubbing (high-impact feature)
 
-Save: Click "Apply / Save" to render the high-quality output.
+- Click and drag horizontally over a thumbnail in preview.
+- Drag distance maps to time offset.
+- Release to lock the chosen frame for that tile.
 
-Command-Line Interface (CLI)
+### 3.3 GUI Reliability Notes
 
-The CLI is ideal for automation.
+- If drag-and-drop libraries are unavailable, the app still runs with fallback behavior.
+- Logs are written under the user profile (`~/.pymovieprint/logs`) to assist debugging.
 
-Basic Grid (5x5)
+---
 
+## 4) CLI Quick Recipes
+
+Base command:
+
+```bash
+python movieprint_maker.py <input_paths...> <output_dir> [options]
+```
+
+### 4.1 Standard 5x5 print
+
+```bash
 python movieprint_maker.py input.mp4 ./output --columns 5 --rows 5
+```
 
+### 4.2 Exact 1920x1080 wallpaper export
 
-Shot Detection with Timecodes
+```bash
+python movieprint_maker.py input.mp4 ./output \
+  --columns 5 --rows 5 \
+  --fit_to_output_params --output_width 1920 --output_height 1080
+```
 
-python movieprint_maker.py input.mp4 ./output --extraction_mode shot --frame_info_show
+### 4.3 Shot-detection timeline
 
+```bash
+python movieprint_maker.py input.mp4 ./output \
+  --extraction_mode shot --layout_mode timeline --target_row_height 120
+```
 
-Wallpaper Mode (Fixed 1920x1080 Output)
+### 4.4 Batch recursive processing with skip policy
 
-python movieprint_maker.py input.mp4 ./output --fit_to_output_params --output_width 1920 --output_height 1080
+```bash
+python movieprint_maker.py ./video_root ./output \
+  --recursive_scan --overwrite_mode skip
+```
 
+### 4.5 HDR tone mapping + GPU decode attempt
 
-Batch Process a Folder (Recursive)
+```bash
+python movieprint_maker.py hdr_input.mkv ./output \
+  --hdr_tonemap --hdr_algorithm reinhard --use_gpu
+```
 
-python movieprint_maker.py ./my_collection ./output --recursive_scan --overwrite_mode skip
+---
 
+## 5) CLI Reference (Organized)
 
-CLI Options Reference
+## 5.1 Inputs & Output Naming
 
-Input/Output
+- `input_paths` (positional): one or more files/directories.
+- `output_dir` (positional): destination folder.
+- `--naming_mode {suffix,custom}`: filename strategy.
+- `--output_filename_suffix`: append to source basename.
+- `--output_filename`: explicit fixed name (custom mode).
+- `--overwrite_mode {overwrite,skip}`: behavior when output exists.
 
-input_paths: Video files or directories.
+## 5.2 Batch Controls
 
-output_dir: Directory for saved images.
+- `--video_extensions`: recognized extensions list.
+- `--recursive_scan`: recurse into subfolders.
 
---naming_mode {suffix,custom}: Naming strategy. Default: suffix.
+## 5.3 Time Segment
 
---output_filename_suffix: Text appended to filename.
+- `--start_time`: accepted examples: `75.5`, `01:15.5`, `00:01:15.5`.
+- `--end_time`: same format; processing stops before this timestamp.
 
---output_filename: Custom filename (used if naming_mode is 'custom').
+## 5.4 Extraction
 
---overwrite_mode {overwrite,skip}: Action if output file exists.
+- `--extraction_mode {interval,shot}`
+- `--interval_seconds`
+- `--interval_frames`
+- `--shot_threshold` (scene detector sensitivity)
+- `--exclude_frames` (interval mode)
+- `--exclude_shots` (shot mode; 1-based indexing)
 
-Batch
+## 5.5 Layout
 
---video_extensions: Comma-separated list (default: .mp4,.avi,.mov,.mkv,.flv,.wmv).
+- `--layout_mode {grid,timeline}`
+- `--columns`
+- `--rows`
+- `--target_thumbnail_width`
+- `--max_frames_for_print`
+- `--target_row_height` (timeline)
+- `--fit_to_output_params`
+- `--output_width`
+- `--output_height`
 
---recursive_scan: Scan directories recursively.
+## 5.6 Styling & Output
 
-Extraction
+- `--padding`
+- `--grid_margin`
+- `--background_color`
+- `--rounded_corners`
+- `--rotate_thumbnails {0,90,180,270}`
+- `--frame_format {jpg,png}`
+- `--output_quality`
+- `--max_output_filesize_kb`
 
---extraction_mode {interval,shot}: Default interval.
+## 5.7 Metadata, Overlays, and Header
 
---interval_seconds: Seconds between frames.
+- `--save_metadata_json`
+- `--show_header`
+- `--show_file_path`
+- `--show_timecode`
+- `--show_frame_num`
+- `--frame_info_show`
+- `--frame_info_timecode_or_frame`
+- `--frame_info_position`
+- `--frame_info_font_color`
+- `--frame_info_bg_color`
+- `--frame_info_size`
+- `--frame_info_margin`
 
---interval_frames: Frames between captures.
+## 5.8 Performance / Advanced
 
---shot_threshold: Sensitivity for shot detection (Default: 27.0).
+- `--use_gpu` (CUDA decode when available)
+- `--hdr_tonemap`
+- `--hdr_algorithm {hable,reinhard,mobius}`
+- `--temp_dir`
+- `--fast` / `--draft` (preview-oriented extraction)
+- `--detect_faces`
+- `--haar_cascade_xml`
 
---start_time, --end_time: Time range to process.
+---
 
-Layout
+## 6) Suggested Presets
 
---layout_mode {grid,timeline}: Default grid.
+### Archival contact sheet (neutral)
+- `--columns 6 --rows 6 --padding 4 --grid_margin 10 --output_quality 95`
 
---columns, --rows: Grid dimensions.
+### Fast review proof
+- `--fast --columns 5 --rows 5 --output_quality 80`
 
---target_thumbnail_width: Force a specific width (px) per thumbnail.
+### Presentation-ready clean output
+- `--fit_to_output_params --output_width 1920 --output_height 1080 --rounded_corners 12 --padding 10 --show_header`
 
---target_row_height: Height for timeline rows.
+---
 
---fit_to_output_params: Force the final image to match output_width/height.
+## 7) Troubleshooting
 
---output_width: Target image width (default: 1920).
+### 7.1 `ffmpeg` not found
 
---output_height: Target image height (default: 1080).
+Symptoms: extraction fails immediately.
 
-Styling & Visuals
+Fix:
 
---padding: Pixels between images.
+```bash
+which ffmpeg
+which ffprobe
+```
 
---grid_margin: Outer margin of the image.
+Install FFmpeg and ensure PATH is configured.
 
---background_color: Hex color (e.g., #FFFFFF).
+### 7.2 Colors look flat/washed out
 
---rounded_corners: Radius for corner rounding (0 = square).
+Likely HDR source without tone mapping.
 
---rotate_thumbnails {0,90,180,270}: Rotation degrees.
+Try:
 
---detect_faces: Enable Haar Cascade face detection.
+```bash
+--hdr_tonemap --hdr_algorithm hable
+```
 
---show_header: Show a header bar with file info at the top.
+### 7.3 GPU flag gives no speedup
 
---output_quality: JPEG Quality (1-100). Default: 95.
+`--use_gpu` depends on FFmpeg build capabilities.
+Use an FFmpeg build with CUDA/NVDEC support.
 
---max_output_filesize_kb: Attempt to reduce quality to meet target KB size.
+### 7.4 Shot detection unavailable
 
-Frame Info / OSD
+Ensure `scenedetect` is installed and importable in the environment.
 
---frame_info_show: Enable text overlay on thumbnails.
+### 7.5 Output size too large
 
---frame_info_timecode_or_frame {timecode,frame}: content to display.
+- Reduce quality: `--output_quality 85`
+- Enable size target: `--max_output_filesize_kb 1500`
+- Reduce rows/columns or fixed resolution.
 
---frame_info_position {top_left,top_right,bottom_left,bottom_right}.
+---
 
---frame_info_font_color: Hex color.
+## 8) Deep-Dive: How Processing Flows Internally
 
---frame_info_bg_color: Hex color for text background box.
+1. Input paths are expanded into valid video files.
+2. For each file, a temp directory is prepared.
+3. Frames are extracted (manual timestamps / grid timestamps / interval / shot).
+4. Optional per-frame transforms are applied (face detect metadata, rotation).
+5. Final grid/timeline image is assembled and saved.
+6. Optional JSON metadata is written.
+7. Temp assets are cleaned unless a custom temp directory is retained.
 
-HDR & Performance
-
---hdr_tonemap: Enable HDR to SDR conversion.
-
---hdr_algorithm {hable,reinhard,mobius}: Tone mapping algorithm.
-
---use_gpu: Attempt to use hardware acceleration (CUDA).
-
---temp_dir: Custom directory for extracted frames.
-
-License
-
-MIT License
+This layered design keeps extraction, composition, and state management decoupled.

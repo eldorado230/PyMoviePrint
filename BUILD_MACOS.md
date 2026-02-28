@@ -1,64 +1,117 @@
-# Building PyMoviePrint for macOS
+# Build Guide: PyMoviePrint macOS App Bundle
 
-This guide explains how to package the PyMoviePrint GUI as a standalone macOS application (`.app`).
+This document explains how to package the GUI into a standalone macOS `.app` using PyInstaller.
+
+---
+
+## What This Produces
+
+- Application bundle: `dist/PyMoviePrint.app`
+- Entry point: `movieprint_gui.py`
+- Build definition: `movieprint_gui.spec`
+
+---
 
 ## Prerequisites
 
-1.  **macOS**: You must be running this on a macOS machine.
-2.  **Python 3.8+**: Ensure Python is installed.
-3.  **Terminal**: You will need to run commands in the terminal.
+- macOS host machine
+- Python 3.8+
+- Xcode Command Line Tools recommended
 
-## Quick Start
+Check basics:
 
-We have provided a script to automate the build process.
+```bash
+python3 --version
+xcode-select -p
+```
 
-1.  Open Terminal.
-2.  Navigate to the project directory.
-3.  Run the build script:
-    ```bash
-    ./build_macos.sh
-    ```
+---
+
+## Fast Path (recommended)
+
+Use the included helper script:
+
+```bash
+./build_macos.sh
+```
 
 The script will:
-*   Create a temporary virtual environment.
-*   Install all necessary dependencies.
-*   Install PyInstaller.
-*   Build the `MoviePrint.app`.
+1. Create `.venv_build`
+2. Install dependencies from `requirements.txt`
+3. Install `pyinstaller`
+4. Remove old `build/` and `dist/`
+5. Build using `movieprint_gui.spec`
 
-Once finished, you will find the application in the `dist/` folder:
-`dist/MoviePrint.app`
+---
 
-## Manual Build Instructions
+## Manual Build (step-by-step)
 
-If you prefer to run the steps manually:
+```bash
+python3 -m venv .venv_build
+source .venv_build/bin/activate
+pip install -r requirements.txt
+pip install pyinstaller
+rm -rf build dist
+pyinstaller movieprint_gui.spec
+```
 
-1.  **Set up a virtual environment**:
-    ```bash
-    python3 -m venv .venv
-    source .venv/bin/activate
-    ```
+Output should appear under `dist/PyMoviePrint.app`.
 
-2.  **Install dependencies**:
-    ```bash
-    pip install -r requirements.txt
-    pip install pyinstaller
-    ```
+---
 
-3.  **Run PyInstaller**:
-    ```bash
-    pyinstaller movieprint_gui.spec
-    ```
+## Verify the App Bundle
 
-4.  **Locate the App**:
-    The application will be in the `dist/` folder.
+### Run from Finder
+Open `dist/PyMoviePrint.app`.
 
-## Troubleshooting
+### Run from Terminal (best for debugging)
 
-*   **"App is damaged and can't be opened"**: This is a common macOS security feature for unsigned apps. To fix this, you may need to remove the quarantine attribute:
-    ```bash
-    xattr -cr dist/MoviePrint.app
-    ```
-*   **Missing dependencies**: If the app crashes immediately, run it from the terminal to see error messages:
-    ```bash
-    dist/MoviePrint.app/Contents/MacOS/MoviePrint
-    ```
+```bash
+dist/PyMoviePrint.app/Contents/MacOS/PyMoviePrint
+```
+
+This surfaces Python/runtime errors directly in terminal output.
+
+---
+
+## Common macOS Issues
+
+### “App is damaged and can’t be opened”
+
+Unsigned bundles may be quarantined by Gatekeeper.
+
+```bash
+xattr -cr dist/PyMoviePrint.app
+```
+
+### App opens then immediately closes
+
+Run binary from terminal to inspect logs:
+
+```bash
+dist/PyMoviePrint.app/Contents/MacOS/PyMoviePrint
+```
+
+### Drag-and-drop missing in packaged app
+
+The `.spec` file includes `tkinterdnd2` collection hooks; if packaging changes, verify those hooks remain.
+
+---
+
+## Optional: Code Signing & Notarization (distribution)
+
+For wider distribution, sign and notarize with Apple developer credentials.
+At minimum:
+1. `codesign` the app bundle recursively.
+2. Submit for notarization.
+3. Staple notarization ticket.
+
+(These steps are intentionally omitted from the default script because they require account-specific credentials.)
+
+---
+
+## Build Hygiene
+
+- Keep packaging changes in `movieprint_gui.spec` version-controlled.
+- Rebuild from a clean environment when dependency versions change.
+- Test on a fresh macOS user account before sharing builds.

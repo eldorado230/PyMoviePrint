@@ -1,180 +1,145 @@
-# PyMoviePrint 
+# PyMoviePrint
 
-PyMoviePrint is a Python application that creates "movie prints," also known as contact sheets or thumbnail indexes, from your video files. It offers both a graphical user interface (GUI) for ease of use and a command-line interface (CLI) for scripting and batch processing.
+PyMoviePrint generates high-quality **movie prints** (contact sheets / thumbnail indexes) from video files.
+It ships with both:
 
-For a detailed guide on how to use all the features, please see the [User Guide](USER_GUIDE.md).
+- a desktop GUI (`movieprint_gui.py`) for interactive workflows, and
+- a CLI (`movieprint_maker.py`) for repeatable automation and batch jobs.
 
-Current version: **1.0.0**
+Current version: **1.0.0**.
 
-## Features
+---
 
-* **Graphical User Interface (GUI)**:
-    * Modern, dark-themed interface.
-    * **Live Preview**: Generate low-res previews to tweak settings before processing.
-    * **Scrubbing**: Click and drag on specific thumbnails in the preview to scrub through the video and select the perfect frame.
-    * **Drag-and-Drop**: Support for dragging files and folders directly into the application.
-* **Command-Line Interface (CLI)**: Enables scripting, automation, and batch processing.
-* **Frame Extraction Modes**:
-    * **Interval Mode**: Extracts frames at regular time or frame intervals.
-    * **Shot Detection Mode**: Utilizes PySceneDetect to extract frames at detected shot boundaries.
-* **HDR Support (Tone Mapping)**: Automatically or manually convert washed-out HDR (High Dynamic Range) colors to standard SDR using customizable algorithms (Hable, Reinhard, Mobius).
-* **Performance**:
-    * **GPU Acceleration**: Option to use NVIDIA CUDA hardware acceleration (requires compatible FFmpeg setup).
-* **Layout Modes**:
-    * **Grid Layout**: Arranges thumbnails in a standard grid.
-    * **Timeline Layout**: Arranges thumbnails proportionally to shot duration (requires shot detection mode).
-    * **Smart Fitting**: Force the final image to specific dimensions (e.g., 1920x1080).
-* **Customization**:
-    * **Frame Info / OSD**: Overlay timecodes or frame numbers directly onto thumbnails with customizable position, color, and size.
-    * **Header Info**: Optional header showing file path and processing metadata.
-    * **Styling**: Adjustable padding, grid margins, background color, and **rounded corners**.
-    * **Rotation**: Rotate thumbnails by 90, 180, or 270 degrees.
-* **Batch Processing**: Process multiple video files or entire directories recursively.
-    * **Overwrite Control**: Choose to skip existing output files or overwrite them.
-* **Naming Control**: Choose between appending suffixes to original filenames or defining custom fixed filenames.
+## Why PyMoviePrint
 
-## Setup / Installation
+PyMoviePrint is designed for editors, archivists, assistants, and reviewers who need a visual summary of footage.
+Compared to simple “every N seconds” contact-sheet scripts, it adds:
 
-1.  **Python Version**: Python 3.8 or newer is recommended.
+- **Multiple extraction strategies**: interval-based and shot-boundary-aware.
+- **Layout control**: classic fixed-column grids and timeline-style rows.
+- **HDR-aware processing**: optional tone mapping for cleaner SDR outputs from HDR sources.
+- **Usable GUI workflow**: preview, iterative tuning, and per-thumbnail scrubbing.
+- **Automation-first CLI**: deterministic output settings for batch pipelines.
 
-2.  **Create a Virtual Environment** (Recommended):
-    ```bash
-    python -m venv .venv
-    ```
-    Activate the virtual environment:
-    * On Windows:
-        ```bash
-        .venv\Scripts\activate
-        ```
-    * On macOS/Linux:
-        ```bash
-        source .venv/bin/activate
-        ```
+---
 
-3.  **Install Dependencies**:
-    Ensure your virtual environment is activated, then run:
-    ```bash
-    pip install -r requirements.txt
-    ```
+## Core Feature Set
 
-4.  **Key Dependencies**:
-    * `opencv-python`: Video processing.
-    * `PySceneDetect`: Shot boundary detection.
-    * `Pillow`: Image manipulation.
-    * `customtkinter`: Modern GUI elements.
-    * `tkinterdnd2`: Drag-and-drop support.
+### Extraction
+- **Interval mode**: extract at `--interval_seconds` or `--interval_frames`.
+- **Shot mode**: use PySceneDetect to detect scene changes.
+- **Range limiting**: process only a time span via `--start_time` and `--end_time`.
 
-5.  **FFmpeg Requirement**:
-    **Crucial:** This tool relies heavily on **FFmpeg** for frame extraction, HDR tone mapping, and GPU acceleration. Ensure `ffmpeg` and `ffprobe` are in your system PATH.
-    * To use **GPU acceleration**, you need an FFmpeg build compiled with `--enable-cuda-nvcc` and `--enable-libnpp`.
-    * To use high-quality **HDR tone mapping**, you need an FFmpeg build with `--enable-libzimg` (zscale).
+### Layout
+- **Grid layout**: rows/columns with adjustable padding, margins, and thumbnail width.
+- **Timeline layout**: shot-based rows with variable thumbnail widths.
+- **Wallpaper mode**: `--fit_to_output_params` to force exact output dimensions.
 
-## Usage
+### Visual Styling
+- Background color, spacing, rounded corners, thumbnail rotation.
+- Optional overlays (timecode/frame labels) and optional header.
+- JPEG quality controls and post-save max filesize reduction.
 
-### GUI (`movieprint_gui.py`)
+### Performance & Compatibility
+- FFmpeg-based extraction pipeline.
+- Optional CUDA hardware decode path when available.
+- Optional HDR→SDR tone mapping (Hable / Reinhard / Mobius).
 
-1.  **Run the GUI**:
-    ```bash
-    python movieprint_gui.py
-    ```
-2.  **Workflow**:
-    * **Input**: Drag videos onto the window or use the "Single Source" / "Batch Queue" tabs.
-    * **Preview**: Click "PREVIEW" to generate a draft.
-    * **Scrub**: In the preview window, click and drag left/right on any thumbnail to change the specific timestamp for that cell.
-    * **Settings**:
-        * **Layout**: Configure columns, rows, margins, and output dimensions.
-        * **Advanced**: Set extraction modes, shot thresholds, and naming schemes.
-        * **HDR & Color**: Enable tone mapping if your video looks washed out.
-    * **Generate**: Click "APPLY / SAVE" to render the full-resolution output.
+---
 
-### Command-Line Interface (`movieprint_maker.py`)
+## Installation
 
-The CLI is ideal for automation.
+### 1) Requirements
+- Python **3.8+**
+- FFmpeg + ffprobe in `PATH`
 
-**Examples**:
+### 2) Setup
 
-* **Simple grid (5x5) for a single video**:
-    ```bash
-    python movieprint_maker.py my_video.mp4 ./output --columns 5 --rows 5
-    ```
+```bash
+python -m venv .venv
+source .venv/bin/activate    # Windows: .venv\Scripts\activate
+pip install -r requirements.txt
+```
 
-* **Timeline layout using shot detection**:
-    ```bash
-    python movieprint_maker.py movie.mov ./output --extraction_mode shot --layout_mode timeline --target_row_height 120
-    ```
+### 3) Verify runtime tools
 
-* **Batch process a folder with HDR Tone Mapping and GPU**:
-    ```bash
-    python movieprint_maker.py ./videos ./output --recursive_scan --hdr_tonemap --hdr_algorithm hable --use_gpu
-    ```
+```bash
+ffmpeg -version
+ffprobe -version
+python -c "import cv2, PIL, customtkinter; print('deps ok')"
+```
 
-* **Stylized print with rounded corners and frame info overlay**:
-    ```bash
-    python movieprint_maker.py clip.mp4 ./output --rounded_corners 15 --padding 10 --frame_info_show --frame_info_position bottom_right
-    ```
+---
 
-* **Fixed 1920x1080 Output with Header**:
-    ```bash
-    python movieprint_maker.py clip.mp4 ./output --fit_to_output_params --output_width 1920 --output_height 1080 --show_header
-    ```
+## Quick Start
 
-## Command-Line Options (`movieprint_maker.py`)
+### GUI
 
-**Input/Output**:
-* `input_paths`: Video files or directories.
-* `output_dir`: Directory for saved images.
-* `--naming_mode {suffix,custom}`: Naming strategy. Default: `suffix`.
-* `--output_filename_suffix`: Text appended to filename (e.g., `_movieprint`).
-* `--output_filename`: Custom filename (used if naming_mode is 'custom').
-* `--overwrite_mode {overwrite,skip}`: Action if output file exists. Default: `overwrite`.
+```bash
+python movieprint_gui.py
+```
 
-**Batch**:
-* `--video_extensions`: Comma-separated list (default: `.mp4,.avi,.mov,.mkv,.flv,.wmv`).
-* `--recursive_scan`: Scan directories recursively.
+Recommended GUI flow:
+1. Add source file(s).
+2. Click **PREVIEW** for a draft render.
+3. Scrub specific thumbnails by click-dragging in preview.
+4. Tune layout/styling/HDR settings.
+5. Click **APPLY / SAVE** for final output.
 
-**Extraction**:
-* `--extraction_mode {interval,shot}`: Default `interval`.
-* `--interval_seconds`: Seconds between frames.
-* `--interval_frames`: Frames between captures.
-* `--shot_threshold`: Sensitivity for shot detection (Default: 27.0).
-* `--start_time`, `--end_time`: Time range to process.
+### CLI
 
-**Layout**:
-* `--layout_mode {grid,timeline}`: Default `grid`.
-* `--columns`, `--rows`: Grid dimensions.
-* `--target_thumbnail_width`: Force a specific width (px) per thumbnail.
-* `--target_row_height`: Height for timeline rows.
-* `--fit_to_output_params`: Force the final image to match output_width/height.
-* `--output_width`: Target image width (default: 1920).
-* `--output_height`: Target image height (default: 1080).
+```bash
+python movieprint_maker.py <input_paths...> <output_dir> [options]
+```
 
-**Styling & Visuals**:
-* `--padding`: Pixels between images.
-* `--grid_margin`: Outer margin of the image.
-* `--background_color`: Hex color (e.g., `#FFFFFF`).
-* `--rounded_corners`: Radius for corner rounding (0 = square).
-* `--rotate_thumbnails {0,90,180,270}`: Rotation degrees.
-* `--detect_faces`: Enable Haar Cascade face detection.
-* `--show_header`: Show a header bar with file info at the top.
-* `--output_quality`: JPEG Quality (1-100). Default: 95.
-* `--max_output_filesize_kb`: Attempt to reduce quality to meet target KB size.
+Examples:
 
-**Frame Info / OSD (On-Screen Display)**:
-* `--frame_info_show`: Enable text overlay on thumbnails.
-* `--frame_info_timecode_or_frame {timecode,frame}`: content to display.
-* `--frame_info_position {top_left,top_right,bottom_left,bottom_right}`.
-* `--frame_info_font_color`: Hex color.
-* `--frame_info_bg_color`: Hex color for text background box.
+```bash
+# 5x5 grid, default naming suffix
+python movieprint_maker.py clip.mp4 ./out --columns 5 --rows 5
 
-**HDR & Performance**:
-* `--hdr_tonemap`: Enable HDR to SDR conversion.
-* `--hdr_algorithm {hable,reinhard,mobius}`: Tone mapping algorithm.
-* `--use_gpu`: Attempt to use hardware acceleration (CUDA).
-* `--temp_dir`: Custom directory for extracted frames.
+# Shot-detected timeline print
+python movieprint_maker.py movie.mov ./out \
+  --extraction_mode shot --layout_mode timeline --target_row_height 120
 
-## GUI Settings Persistence
+# Fixed 1920x1080 output with HDR tone mapping
+python movieprint_maker.py hdr_source.mkv ./out \
+  --fit_to_output_params --output_width 1920 --output_height 1080 \
+  --hdr_tonemap --hdr_algorithm hable
 
-The GUI automatically saves your preferences (layout, colors, extraction settings) to `movieprint_gui_settings.json` upon exit and restores them on launch.
+# Recursive batch with skip-existing policy
+python movieprint_maker.py ./dailies ./out --recursive_scan --overwrite_mode skip
+```
 
-## Contributing
-Contributions are welcome! Please fork the repository, make your changes on a separate branch, and submit a pull request.
+---
+
+## Documentation Map
+
+- **User Guide**: full GUI + CLI walkthrough and option reference in `USER_GUIDE.md`.
+- **macOS packaging**: PyInstaller workflow in `BUILD_MACOS.md`.
+
+---
+
+## Project Architecture (Deep-Dive Summary)
+
+- `movieprint_gui.py`: full CustomTkinter application, preview workflow, scrubbing handler, queued worker pattern.
+- `movieprint_maker.py`: orchestration layer; argument parsing, input discovery, extraction mode routing, metadata output.
+- `video_processing.py`: frame extraction engines (FFmpeg/OpenCV), shot detection integration, HDR probing/tone mapping path.
+- `image_grid.py`: rendering engine for grid/timeline compositing, overlays, rounding, and file export.
+- `state_manager.py`: GUI state dataclasses plus undo/redo snapshots.
+- `movieprint_gui.spec` + `build_macos.sh`: packaging recipe for standalone macOS app.
+
+---
+
+## Known Operational Notes
+
+- FFmpeg availability is critical; most extraction paths rely on it.
+- Shot mode depends on PySceneDetect support in the environment.
+- HDR tone mapping in shot mode is currently limited compared with interval/timestamp extraction workflows.
+- For best deterministic outputs in automation, pin explicit values (rows/columns, dimensions, naming, overwrite mode).
+
+---
+
+## License
+
+MIT
