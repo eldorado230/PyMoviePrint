@@ -39,6 +39,7 @@ Compared to simple “every N seconds” contact-sheet scripts, it adds:
 - Background color, spacing, rounded corners, thumbnail rotation.
 - Optional overlays (timecode/frame labels) and optional header.
 - JPEG quality controls and post-save max filesize reduction.
+- Optional **frames-only export** (`--output_frames_only`) to save selected thumbnails as individual files into a folder.
 
 ### Performance & Compatibility
 - FFmpeg-based extraction pipeline.

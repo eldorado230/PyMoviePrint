@@ -731,6 +731,30 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.CTkLabel(parent, text="Output Location:", text_color=Theme.TEXT_MUTED).pack(anchor="w", pady=(15, 0))
         ctk.CTkLabel(parent, text="ℹ Files will be saved alongside source videos.", font=Theme.FONT_BOLD).pack(anchor="w", pady=(0, 5))
 
+        self.output_frames_only_cb = ctk.CTkCheckBox(
+            parent,
+            text="Export individual frames only",
+            variable=self.output_frames_only_var,
+            fg_color=Theme.ACCENT_CYAN,
+            hover_color=Theme.BUTTON_HOVER,
+        )
+        self.output_frames_only_cb.pack(anchor="w", pady=(4, 2))
+
+        frames_dir_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        frames_dir_frame.pack(fill="x", pady=(0, 8))
+        ctk.CTkEntry(
+            frames_dir_frame,
+            textvariable=self.individual_frames_output_dir_var,
+            placeholder_text="Optional folder for exported frames",
+        ).pack(side="left", fill="x", expand=True)
+        ctk.CTkButton(
+            frames_dir_frame,
+            text="Browse",
+            width=70,
+            command=self.browse_output_dir,
+            fg_color=Theme.BG_SECONDARY,
+        ).pack(side="left", padx=(6, 0))
+
         # --- NEW: Overwrite Switch ---
         ctk.CTkLabel(parent, text="Existing Files:").pack(anchor="w", pady=(5,0))
         self.overwrite_seg = ctk.CTkSegmentedButton(parent, values=["overwrite", "skip"], variable=self.overwrite_mode_var,
@@ -1288,6 +1312,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             settings.output_naming_mode = self.output_naming_mode_var.get()
             settings.output_filename_suffix = self.output_filename_suffix_var.get()
             settings.output_filename = self.output_filename_var.get()
+            settings.output_frames_only = self.output_frames_only_var.get()
+            settings.individual_frames_output_dir = self.individual_frames_output_dir_var.get().strip()
             settings.temp_dir = None
             settings.haar_cascade_xml = None
             settings.grid_margin = int(self.grid_margin_var.get())
@@ -1374,7 +1400,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             if path in self.batch_file_list: self.batch_file_list.remove(path)
             self.batch_listbox.delete(i)
 
-    def browse_output_dir(self): pass
+    def browse_output_dir(self):
+        selected = filedialog.askdirectory(title="Select Folder for Individual Frame Exports")
+        if selected:
+            self.individual_frames_output_dir_var.set(selected)
     def pick_bg_color(self):
         c = colorchooser.askcolor(color=self.background_color_var.get())
         if c[1]: self.background_color_var.set(c[1])
