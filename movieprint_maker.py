@@ -369,6 +369,35 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
     logger.info(f"  MoviePrint successfully saved to {output_path}")
     return True, layout_data, None
 
+
+def _export_individual_frames(metadata_list, output_dir, settings, logger):
+    """Exports selected thumbnails as individual frame files."""
+    os.makedirs(output_dir, exist_ok=True)
+    frame_format = getattr(settings, 'frame_format', 'jpg').lower()
+    copied = []
+
+    for idx, meta in enumerate(metadata_list, 1):
+        source_path = meta.get('frame_path')
+        if not source_path or not os.path.exists(source_path):
+            continue
+
+        timestamp = meta.get('timestamp_sec')
+        if timestamp is None:
+            target_name = f"frame_{idx:04d}.{frame_format}"
+        else:
+            safe_ts = str(round(float(timestamp), 3)).replace('.', 'p')
+            target_name = f"frame_{idx:04d}_{safe_ts}s.{frame_format}"
+
+        target_path = os.path.join(output_dir, target_name)
+        shutil.copy2(source_path, target_path)
+        copied.append(target_path)
+
+    if not copied:
+        return False, "No frames were exported."
+
+    logger.info(f"  Exported {len(copied)} individual frames to {output_dir}")
+    return True, output_dir
+
 def _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, process_warnings, movieprint_path, logger):
     """Saves metadata JSON. STRICTLY DISABLED if save_metadata_json is False."""
     if not getattr(settings, 'save_metadata_json', False): return
@@ -436,10 +465,29 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
         metadata_list = _limit_frames_for_grid(metadata_list, settings, temp_dir, cleanup_temp, logger)
         metadata_list = _process_thumbnails(metadata_list, settings, logger)
 
-        # 6. Generation
+        # 6. Generation / Export
+        if getattr(settings, 'output_frames_only', False):
+            final_path = os.path.join(target_output_dir, os.path.splitext(effective_output_filename)[0] + "_frames")
+            if getattr(settings, 'individual_frames_output_dir', '').strip():
+                base_dir = os.path.abspath(getattr(settings, 'individual_frames_output_dir').strip())
+                final_path = os.path.join(base_dir, os.path.basename(final_path))
+
+            overwrite_mode = getattr(settings, 'overwrite_mode', 'overwrite')
+            if os.path.exists(final_path):
+                if overwrite_mode == 'skip':
+                    logger.info(f"Skipping frame export for {video_file_path} (Folder exists: {final_path})")
+                    return True, final_path
+                shutil.rmtree(final_path, ignore_errors=True)
+
+            success, message_or_path = _export_individual_frames(metadata_list, final_path, settings, logger)
+            if not success:
+                return False, message_or_path
+            return True, message_or_path
+
         final_path = os.path.join(target_output_dir, effective_output_filename)
         success, layout_data, error_msg = _generate_movieprint(metadata_list, settings, final_path, logger)
-        if not success: return False, error_msg
+        if not success:
+            return False, error_msg
 
         # 7. Post-Processing
         enforce_max_filesize(final_path, settings.max_output_filesize_kb, logger)
@@ -507,10 +555,11 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
         # 2. Skip Check
         target_dir = os.path.dirname(os.path.abspath(video_path))
         full_output_path = os.path.join(target_dir, effective_output_name)
-        
-        if overwrite_mode == 'skip' and os.path.exists(full_output_path):
-            logger.info(f"Skipping {video_path} (Output exists: {effective_output_name})")
-            continue
+
+        if not getattr(settings, 'output_frames_only', False):
+            if overwrite_mode == 'skip' and os.path.exists(full_output_path):
+                logger.info(f"Skipping {video_path} (Output exists: {effective_output_name})")
+                continue
 
         try:
             success, message_or_path = process_single_video(
@@ -587,6 +636,8 @@ def main():
     style_grp.add_argument("--use_gpu", action="store_true")
     style_grp.add_argument("--fast", "--draft", action="store_true", dest="fast_preview")
     style_grp.add_argument("--output_quality", type=int, default=95)
+    style_grp.add_argument("--output_frames_only", action="store_true", help="Export individual selected frames instead of creating a combined MoviePrint image.")
+    style_grp.add_argument("--individual_frames_output_dir", type=str, default="", help="Base directory for individual frame export folders.")
     
     # HDR / Color
     style_grp.add_argument("--hdr_tonemap", action="store_true")

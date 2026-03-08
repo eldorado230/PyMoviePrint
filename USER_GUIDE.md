@@ -140,6 +140,8 @@ python movieprint_maker.py hdr_input.mkv ./output \
 - `--output_filename_suffix`: append to source basename.
 - `--output_filename`: explicit fixed name (custom mode).
 - `--overwrite_mode {overwrite,skip}`: behavior when output exists.
+- `--output_frames_only`: export only the selected frames (no combined MoviePrint image).
+- `--individual_frames_output_dir`: optional base folder where `<movieprint_name>_frames/` folders are created.
 
 ## 5.2 Batch Controls
 

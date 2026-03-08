@@ -16,6 +16,8 @@ class ProjectSettings:
     output_filename_suffix: str = "_movieprint"
     output_filename: str = ""
     overwrite_mode: str = "overwrite" # NEW: "overwrite" or "skip"
+    output_frames_only: bool = False
+    individual_frames_output_dir: str = ""
 
     # Extraction
     extraction_mode: str = "interval"  # "interval" or "shot"
