@@ -454,7 +454,8 @@ class VideoExtractor:
                     'timestamp_sec': round(est_time, 3), 
                     'video_filename': self.video_filename
                 })
-            except: pass
+            except OSError as e:
+                self.logger.warning(f"Could not finalize extracted frame '{file_path}': {e}")
 
         return results
 

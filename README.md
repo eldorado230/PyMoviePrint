@@ -110,6 +110,12 @@ python movieprint_maker.py hdr_source.mkv ./out \
 
 # Recursive batch with skip-existing policy
 python movieprint_maker.py ./dailies ./out --recursive_scan --overwrite_mode skip
+
+# Use JSON config defaults (CLI flags still override)
+python movieprint_maker.py clip.mp4 ./out --config_file ./movieprint_preset.json
+
+# Save a template JSON of effective options and exit
+python movieprint_maker.py clip.mp4 ./out --save_config_template ./movieprint_template.json
 ```
 
 ---

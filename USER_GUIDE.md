@@ -128,6 +128,18 @@ python movieprint_maker.py hdr_input.mkv ./output \
   --hdr_tonemap --hdr_algorithm reinhard --use_gpu
 ```
 
+### 4.6 Config preset workflow
+
+```bash
+# Save a JSON template of current effective settings
+python movieprint_maker.py input.mp4 ./output --save_config_template ./movieprint_template.json
+
+# Load defaults from JSON, then override specific fields with CLI flags
+python movieprint_maker.py input.mp4 ./output \
+  --config_file ./movieprint_template.json \
+  --columns 6 --rows 6
+```
+
 ---
 
 ## 5) CLI Reference (Organized)
@@ -136,6 +148,8 @@ python movieprint_maker.py hdr_input.mkv ./output \
 
 - `input_paths` (positional): one or more files/directories.
 - `output_dir` (positional): destination folder.
+- `--config_file`: JSON file that provides default option values (CLI flags override).
+- `--save_config_template`: write current effective settings as JSON and exit.
 - `--naming_mode {suffix,custom}`: filename strategy.
 - `--output_filename_suffix`: append to source basename.
 - `--output_filename`: explicit fixed name (custom mode).

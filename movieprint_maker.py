@@ -55,6 +55,41 @@ def parse_time_to_seconds(time_str):
         return float(h * 3600 + m * 60 + s)
     return None
 
+
+def load_config_defaults(config_file_path, parser, logger):
+    """
+    Loads JSON config defaults and keeps only keys supported by the parser.
+    Returns an empty dict if no config file is provided.
+    """
+    if not config_file_path:
+        return {}
+
+    if not os.path.isfile(config_file_path):
+        raise FileNotFoundError(f"Config file not found: {config_file_path}")
+
+    try:
+        with open(config_file_path, 'r', encoding='utf-8') as f:
+            raw = json.load(f)
+    except json.JSONDecodeError as e:
+        raise ValueError(f"Invalid JSON in config file '{config_file_path}': {e}")
+
+    if not isinstance(raw, dict):
+        raise ValueError("Config file must be a JSON object with key/value settings.")
+
+    valid_dests = {action.dest for action in parser._actions if action.dest not in ("help",)}
+    filtered = {}
+    ignored = []
+    for k, v in raw.items():
+        if k in valid_dests:
+            filtered[k] = v
+        else:
+            ignored.append(k)
+
+    if ignored:
+        logger.warning(f"Ignoring unsupported config keys: {', '.join(sorted(ignored))}")
+
+    return filtered
+
 def discover_video_files(input_sources, valid_extensions_str, recursive_scan, logger):
     """Scans input paths (files or directories) for valid video files."""
     video_files_found = set()
@@ -223,14 +258,13 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
             hdr_algorithm=hdr_algo
         )
     elif settings.extraction_mode == "shot":
-        if hdr_tonemap:
-            logger.warning("  [Limit] HDR Tone Mapping is not yet supported in Shot Extraction mode. Output may look washed out.")
-        
         return video_processing.extract_shot_boundary_frames(
             video_path=video_file_path, output_folder=temp_dir,
             output_format=settings.frame_format, detector_threshold=settings.shot_threshold,
             start_time_sec=start_sec, end_time_sec=end_sec,
-            logger=logger
+            logger=logger,
+            hdr_tonemap=hdr_tonemap,
+            hdr_algorithm=hdr_algo
         )
     
     return False, []
@@ -273,8 +307,10 @@ def _limit_frames_for_grid(metadata_list, settings, temp_dir, cleanup_temp, logg
         all_temp_paths = glob.glob(os.path.join(temp_dir, f"*.{settings.frame_format}"))
         for path in all_temp_paths:
             if path not in frames_to_keep_paths:
-                try: os.remove(path)
-                except OSError: pass
+                try:
+                    os.remove(path)
+                except OSError as e:
+                    logger.warning(f"  Could not remove temporary frame '{path}': {e}")
 
     return selected_metadata
 
@@ -295,7 +331,8 @@ def _process_thumbnails(metadata_list, settings, logger):
                         gray = cv2.cvtColor(frame_img, cv2.COLOR_BGR2GRAY)
                         faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(20, 20))
                         meta['face_detection'] = {'num_faces': len(faces), 'face_bboxes_thumbnail': [list(f) for f in faces]}
-                    except Exception: pass
+                    except Exception as e:
+                        logger.warning(f"  Face detection failed for '{meta.get('frame_path')}': {e}")
 
     # 2. Rotation
     if settings.rotate_thumbnails != 0:
@@ -308,7 +345,8 @@ def _process_thumbnails(metadata_list, settings, logger):
                     if thumb_img is None: continue
                     rotated = cv2.rotate(thumb_img, rot_flag)
                     cv2.imwrite(meta['frame_path'], rotated)
-                except Exception: pass
+                except Exception as e:
+                    logger.warning(f"  Thumbnail rotation failed for '{meta.get('frame_path')}': {e}")
 
     return metadata_list
 
@@ -435,9 +473,18 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
     logger.info(f"\nProcessing video: {video_file_path}...")
 
     # 1. Path Resolution
-    target_output_dir = os.path.dirname(os.path.abspath(video_file_path))
+    configured_output_dir = getattr(settings, 'output_dir', None)
+    if configured_output_dir:
+        target_output_dir = os.path.abspath(configured_output_dir)
+        try:
+            os.makedirs(target_output_dir, exist_ok=True)
+        except OSError as e:
+            return False, f"Cannot create output directory '{target_output_dir}': {e}"
+    else:
+        target_output_dir = os.path.dirname(os.path.abspath(video_file_path))
+
     if not os.access(target_output_dir, os.W_OK):
-        return False, f"Cannot write to source directory: {target_output_dir}. Permission denied."
+        return False, f"Cannot write to output directory: {target_output_dir}. Permission denied."
 
     # 2. Parse Times
     start_sec = parse_time_to_seconds(settings.start_time)
@@ -553,7 +600,8 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
             effective_output_name = f"{base}{suffix}.{output_print_format}"
 
         # 2. Skip Check
-        target_dir = os.path.dirname(os.path.abspath(video_path))
+        configured_output_dir = getattr(settings, 'output_dir', None)
+        target_dir = os.path.abspath(configured_output_dir) if configured_output_dir else os.path.dirname(os.path.abspath(video_path))
         full_output_path = os.path.join(target_dir, effective_output_name)
 
         if not getattr(settings, 'output_frames_only', False):
@@ -574,14 +622,15 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
     if progress_callback: progress_callback(total_videos, total_videos, "Batch completed")
     return successful_ops, failed_ops
 
-def main():
+def _build_parser():
     parser = argparse.ArgumentParser(description="Create PyMoviePrints.")
     parser.add_argument('--version', action='version', version=f'%(prog)s {__version__}')
-    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
-    logger = logging.getLogger(__name__)
 
     # Inputs
     parser.add_argument("input_paths", nargs='+', help="Video files or directories.")
+    parser.add_argument("output_dir", help="Destination folder for generated outputs.")
+    parser.add_argument("--config_file", type=str, default=None, help="JSON file with default option values. CLI flags override these defaults.")
+    parser.add_argument("--save_config_template", type=str, default=None, help="Write a JSON template of current effective settings to this path and exit.")
     
     # Naming
     parser.add_argument("--naming_mode", type=str, default="suffix", choices=["suffix", "custom"], dest="output_naming_mode")
@@ -657,8 +706,37 @@ def main():
     style_grp.add_argument("--frame_info_margin", type=int, default=5)
     style_grp.add_argument("--rounded_corners", type=int, default=0)
     style_grp.add_argument("--grid_margin", type=int, default=0)
+    return parser
+
+
+def main():
+    logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+    logger = logging.getLogger(__name__)
+
+    pre_parser = argparse.ArgumentParser(add_help=False)
+    pre_parser.add_argument("--config_file", type=str, default=None)
+    pre_args, _ = pre_parser.parse_known_args()
+
+    parser = _build_parser()
+    try:
+        config_defaults = load_config_defaults(pre_args.config_file, parser, logger)
+        if config_defaults:
+            parser.set_defaults(**config_defaults)
+    except (FileNotFoundError, ValueError) as e:
+        parser.error(str(e))
 
     args = parser.parse_args()
+
+    if args.save_config_template:
+        template_data = {k: v for k, v in vars(args).items() if k != "save_config_template"}
+        output_path = os.path.abspath(args.save_config_template)
+        output_dir = os.path.dirname(output_path)
+        if output_dir:
+            os.makedirs(output_dir, exist_ok=True)
+        with open(output_path, 'w', encoding='utf-8') as f:
+            json.dump(template_data, f, indent=2)
+        logger.info(f"Config template written to {output_path}")
+        return
 
     # Validation
     if args.extraction_mode == "interval" and args.interval_seconds is None and args.interval_frames is None:
