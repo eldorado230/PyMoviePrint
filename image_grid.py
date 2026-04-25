@@ -166,7 +166,8 @@ def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger
                     else: w, h = img.size
                     max_w = max(max_w, w)
                     max_h = max(max_h, h)
-            except: pass
+            except Exception as e:
+                logger.warning(f"Could not inspect thumbnail '{p}' for sizing: {e}")
         
         cell_w = config.target_thumb_width if config.target_thumb_width else (max_w or 200)
         if max_w > 0: cell_h = int(cell_w * (max_h / max_w))
@@ -262,7 +263,9 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
                  aspect = native_w / native_h
                  base_w = int(target_h * aspect)
                  items.append({'path': item['image_path'], 'w': base_w, 'h': target_h})
-        except: continue
+        except Exception as e:
+            logger.warning(f"Could not inspect timeline source '{item.get('image_path')}': {e}")
+            continue
 
     for item in items:
         if current_row_width + item['w'] + config.padding > max_w:
@@ -322,7 +325,8 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
                     
                     layout_data.append({'image_path': item['path'], 'x': x, 'y': y, 'width': draw_w, 'height': target_h})
                     x += draw_w + int(config.padding * scale)
-            except: pass
+            except Exception as e:
+                logger.warning(f"Failed to render timeline thumbnail '{item.get('path')}': {e}")
         y += target_h + config.padding
 
     if _save_image_optimized(grid_image, config.output_path, config.quality, logger):
