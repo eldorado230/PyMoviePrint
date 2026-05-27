@@ -9,6 +9,9 @@ from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from PIL import Image
+
+import image_grid
 import movieprint_maker
 
 
@@ -122,6 +125,94 @@ class MoviePrintMakerTests(unittest.TestCase):
             self.assertEqual(ok, [])
             self.assertEqual(failed, [])
             process_mock.assert_not_called()
+
+    def test_limit_frames_for_grid_allows_single_selection(self):
+        metadata = [
+            {"frame_path": f"frame_{idx:03d}.jpg", "timestamp_sec": float(idx)}
+            for idx in range(4)
+        ]
+        settings = SimpleNamespace(
+            layout_mode="grid",
+            max_frames_for_print=1,
+            frame_format="jpg",
+        )
+
+        selected = movieprint_maker._limit_frames_for_grid(
+            metadata, settings, temp_dir="", cleanup_temp=False, logger=self.logger
+        )
+
+        self.assertEqual(selected, [metadata[0]])
+
+    def test_generate_timeline_movieprint_uses_output_width(self):
+        settings = SimpleNamespace(
+            layout_mode="timeline",
+            padding=5,
+            background_color="#111111",
+            grid_margin=0,
+            rounded_corners=0,
+            frame_info_show=False,
+            show_header=False,
+            show_file_path=True,
+            show_timecode=True,
+            show_frame_num=True,
+            frame_info_timecode_or_frame="timecode",
+            frame_info_font_color="#FFFFFF",
+            frame_info_bg_color="#000000",
+            frame_info_position="bottom_left",
+            frame_info_size=10,
+            frame_info_margin=5,
+            output_quality=95,
+            fit_to_output_params=False,
+            output_width=1280,
+            output_height=720,
+            target_row_height=120,
+        )
+        metadata = [{
+            "frame_path": "shot_001.jpg",
+            "duration_frames": 42,
+            "timestamp_sec": 1.5,
+            "frame_number": 36,
+            "video_filename": "clip.mp4",
+        }]
+
+        with mock.patch.object(movieprint_maker.image_grid, "create_image_grid", return_value=(True, [])) as create_mock:
+            ok, layout_data, error = movieprint_maker._generate_movieprint(
+                metadata, settings, "out.jpg", self.logger
+            )
+
+        self.assertTrue(ok)
+        self.assertEqual(layout_data, [])
+        self.assertIsNone(error)
+        create_kwargs = create_mock.call_args.kwargs
+        self.assertEqual(create_kwargs["output_width"], 1280)
+        self.assertNotIn("max_grid_width", create_kwargs)
+
+    def test_timeline_layout_uses_width_ratio(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = os.path.join(tmp, "first.jpg")
+            second = os.path.join(tmp, "second.jpg")
+            output = os.path.join(tmp, "timeline.jpg")
+
+            Image.new("RGB", (100, 50), "red").save(first)
+            Image.new("RGB", (100, 50), "blue").save(second)
+
+            ok, layout_data = image_grid.create_image_grid(
+                image_source_data=[
+                    {"image_path": first, "width_ratio": 1, "timestamp_sec": 1.0},
+                    {"image_path": second, "width_ratio": 4, "timestamp_sec": 2.0},
+                ],
+                output_path=output,
+                layout_mode="timeline",
+                target_row_height=40,
+                output_width=500,
+                padding=0,
+                show_header=False,
+                frame_info_show=True,
+            )
+
+            self.assertTrue(ok)
+            self.assertTrue(os.path.exists(output))
+            self.assertGreater(layout_data[1]["width"], layout_data[0]["width"])
 
 
 if __name__ == "__main__":

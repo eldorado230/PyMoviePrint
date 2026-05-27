@@ -258,15 +258,19 @@ def _limit_frames_for_grid(metadata_list, settings, temp_dir, cleanup_temp, logg
             settings.max_frames_for_print is None or len(metadata_list) <= settings.max_frames_for_print:
         return metadata_list
 
-    num_to_select = settings.max_frames_for_print
+    num_to_select = int(settings.max_frames_for_print)
     original_count = len(metadata_list)
-    
-    indices_to_pick = [int(i * (original_count - 1) / (num_to_select - 1)) for i in range(num_to_select)]
-    if num_to_select == 1 and original_count > 0:
-        indices_to_pick = [0]
 
-    selected_metadata = [metadata_list[i] for i in sorted(list(set(indices_to_pick)))]
-    
+    if num_to_select <= 0:
+        logger.warning("  max_frames_for_print must be positive; no frames selected.")
+        return []
+
+    if num_to_select == 1:
+        selected_metadata = [metadata_list[0]] if original_count > 0 else []
+    else:
+        indices_to_pick = [int(i * (original_count - 1) / (num_to_select - 1)) for i in range(num_to_select)]
+        selected_metadata = [metadata_list[i] for i in sorted(list(set(indices_to_pick)))]
+
     if cleanup_temp:
         frames_to_keep_paths = {meta['frame_path'] for meta in selected_metadata}
         all_temp_paths = glob.glob(os.path.join(temp_dir, f"*.{settings.frame_format}"))
@@ -319,10 +323,18 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
     """Generates the final image using image_grid."""
     items_for_grid = []
     if settings.layout_mode == "timeline":
-        items_for_grid = [{'image_path': sm['frame_path'], 'width_ratio': float(sm.get('duration_frames', 1.0))}
+        items_for_grid = [{'image_path': sm['frame_path'],
+                           'width_ratio': float(sm.get('duration_frames', 1.0)),
+                           'timestamp_sec': sm.get('timestamp_sec'),
+                           'frame_number': sm.get('frame_number'),
+                           'video_filename': sm.get('video_filename')}
                           for sm in metadata_list if sm.get('duration_frames', 0) > 0]
     else:
-        items_for_grid = [meta['frame_path'] for meta in metadata_list]
+        items_for_grid = [{'image_path': meta['frame_path'],
+                           'timestamp_sec': meta.get('timestamp_sec'),
+                           'frame_number': meta.get('frame_number'),
+                           'video_filename': meta.get('video_filename')}
+                          for meta in metadata_list]
 
     if not items_for_grid:
         return False, None, "No frames available for grid generation."
@@ -348,6 +360,7 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
         'frame_info_size': settings.frame_info_size,
         'frame_info_margin': settings.frame_info_margin,
         'quality': getattr(settings, 'output_quality', 95),
+        'header_title': metadata_list[0].get('video_filename', '') if metadata_list else '',
         # NEW PARAMS
         'fit_to_output_params': getattr(settings, 'fit_to_output_params', False),
         'output_width': getattr(settings, 'output_width', 1920),
@@ -362,8 +375,7 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
         })
     elif settings.layout_mode == "timeline":
         grid_params.update({
-            'target_row_height': settings.target_row_height,
-            'max_grid_width': settings.output_image_width
+            'target_row_height': settings.target_row_height
         })
 
     success, layout_data = image_grid.create_image_grid(**grid_params)
@@ -401,7 +413,7 @@ def _export_individual_frames(metadata_list, output_dir, settings, logger):
     logger.info(f"  Exported {len(copied)} individual frames to {output_dir}")
     return True, output_dir
 
-def _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, process_warnings, movieprint_path, logger):
+def _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, process_warnings, movieprint_path, logger, source_video_path=None):
     """Saves metadata JSON. STRICTLY DISABLED if save_metadata_json is False."""
     if not getattr(settings, 'save_metadata_json', False): return
 
@@ -422,7 +434,7 @@ def _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, pro
     
     full_meta = {
         'movieprint_image_filename': os.path.basename(movieprint_path),
-        'source_video_processed': os.path.abspath(settings.input_paths[0]),
+        'source_video_processed': os.path.abspath(source_video_path or settings.input_paths[0]),
         'generation_parameters': settings_copy,
         'thumbnails': combined_thumb_meta
     }
@@ -504,7 +516,7 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
         # 7. Post-Processing
         enforce_max_filesize(final_path, settings.max_output_filesize_kb, logger)
         if getattr(settings, 'save_metadata_json', False):
-            _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, process_warnings, final_path, logger)
+            _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, process_warnings, final_path, logger, source_video_path=video_file_path)
 
         return True, final_path
 

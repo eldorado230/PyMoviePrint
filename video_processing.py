@@ -326,7 +326,9 @@ class VideoExtractor:
         results.sort(key=lambda x: x['timestamp_sec'])
         return results
 
-    def extract_shots(self, output_folder: str, threshold: float = 27.0, ext: str = "jpg", hdr_tonemap: bool = False, hdr_algorithm: str = 'hable') -> List[Dict[str, Any]]:
+    def extract_shots(self, output_folder: str, threshold: float = 27.0, ext: str = "jpg",
+                      start_time: float = 0.0, end_time: Optional[float] = None,
+                      hdr_tonemap: bool = False, hdr_algorithm: str = 'hable') -> List[Dict[str, Any]]:
         if not SCENEDETECT_AVAILABLE:
             self.logger.error("PySceneDetect not installed.")
             return []
@@ -345,9 +347,15 @@ class VideoExtractor:
             self.logger.info(f"  Detected {len(scenes)} shots.")
             
             for i, (start, end) in enumerate(scenes):
+                timestamp_sec = start.get_seconds()
+                if timestamp_sec < start_time:
+                    continue
+                if end_time is not None and timestamp_sec >= end_time:
+                    continue
+
                 detected_shots.append({
                     'index': i,
-                    'timestamp_sec': start.get_seconds(),
+                    'timestamp_sec': timestamp_sec,
                     'frame_number': start.get_frames(),
                     'duration_frames': end.get_frames() - start.get_frames()
                 })
@@ -480,8 +488,16 @@ def extract_frames_from_timestamps(video_path, timestamps, output_folder, logger
 
 def extract_shot_boundary_frames(video_path, output_folder, logger, detector_threshold=27.0, output_format="jpg", start_time_sec=0.0, end_time_sec=None, hdr_tonemap=False, hdr_algorithm='hable'):
     _ensure_cv2_available(logger)
-    with VideoExtractor(video_path, logger) as ex: 
-        return True, ex.extract_shots(output_folder, detector_threshold, output_format, hdr_tonemap=hdr_tonemap, hdr_algorithm=hdr_algorithm)
+    with VideoExtractor(video_path, logger) as ex:
+        return True, ex.extract_shots(
+            output_folder,
+            detector_threshold,
+            output_format,
+            start_time=start_time_sec or 0.0,
+            end_time=end_time_sec,
+            hdr_tonemap=hdr_tonemap,
+            hdr_algorithm=hdr_algorithm
+        )
 
 def extract_frames(video_path, output_folder, logger, interval_seconds=None, interval_frames=None, output_format="jpg", start_time_sec=0.0, end_time_sec=None, use_gpu=False, fast_preview=False, hdr_tonemap=False, hdr_algorithm='hable'):
     _ensure_cv2_available(logger)

@@ -34,6 +34,7 @@ class FontConfig:
 class GridConfig:
     """Consolidates visual settings."""
     output_path: str
+    header_title: str = ""
     # Grid Specific
     columns: int = 5
     rows: int = 5 # Added explicit row count for calculation
@@ -126,14 +127,48 @@ def _save_image_optimized(img: Image.Image, path: str, quality: int, logger: log
         logger.error(f"Failed to save image to {path}: {e}")
         return False
 
+def _coerce_image_item(item: Union[str, Dict[str, Any]]) -> Tuple[str, Dict[str, Any]]:
+    if isinstance(item, dict):
+        return item.get("image_path", ""), item
+    return item, {"image_path": item}
+
+def _format_timecode(seconds: Any) -> Optional[str]:
+    if seconds is None:
+        return None
+    try:
+        total_seconds = max(0.0, float(seconds))
+    except (TypeError, ValueError):
+        return None
+
+    hours = int(total_seconds // 3600)
+    minutes = int((total_seconds % 3600) // 60)
+    secs = total_seconds % 60
+    if hours:
+        return f"{hours:02d}:{minutes:02d}:{secs:06.3f}"
+    return f"{minutes:02d}:{secs:06.3f}"
+
+def _frame_info_label(meta: Dict[str, Any], index: int, conf: FontConfig) -> str:
+    if conf.frame_info_type == "frame":
+        frame_number = meta.get("frame_number")
+        return f"#{frame_number}" if frame_number is not None else f"#{index + 1}"
+
+    return _format_timecode(meta.get("timestamp_sec")) or f"#{index + 1}"
+
+def _header_text(first_path: str, first_meta: Dict[str, Any], config: GridConfig) -> str:
+    if config.header_title:
+        return config.header_title
+    return first_meta.get("video_filename") or os.path.basename(first_path)
+
 # --- Layout Engines ---
 
-def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger: logging.Logger):
+def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], config: GridConfig, logger: logging.Logger):
     """Standard grid layout. Supports both dynamic size and fixed output size."""
     layout_data = []
-    if not image_paths: return False, []
-    
-    num_images = len(image_paths)
+    image_items = [_coerce_image_item(item) for item in image_paths]
+    image_items = [(path, meta) for path, meta in image_items if path]
+    if not image_items: return False, []
+
+    num_images = len(image_items)
     header_height = 50 if config.font_settings.show_header else 0
 
     # --- Mode 1: Fixed Output Resolution (Wallpaper Mode) ---
@@ -147,19 +182,19 @@ def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger
         
         cell_w = max(1, avail_w // config.columns)
         cell_h = max(1, avail_h // config.rows)
-        
+
         # We process 'rows * columns' max images to ensure fit
         max_images = config.rows * config.columns
-        image_paths = image_paths[:max_images]
+        image_items = image_items[:max_images]
 
     # --- Mode 2: Dynamic Growth (Standard Mode) ---
     else:
         # Determine Cell Size from content
         cell_w, cell_h = 0, 0
         max_w, max_h = 0, 0
-        
+
         # Sample first few images to guess aspect ratio
-        for p in image_paths[:5]: 
+        for p, _meta in image_items[:5]:
             try:
                 with Image.open(p) as img:
                     if config.rotation in [90, 270]: w, h = img.height, img.width
@@ -187,14 +222,15 @@ def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger
     draw = ImageDraw.Draw(grid_image)
     if config.font_settings.show_header:
         f = _load_font(config.font_settings.get_font_path(), 20)
-        draw.text((config.grid_margin, config.grid_margin), os.path.basename(image_paths[0]), font=f, fill=config.font_settings.font_color)
+        first_path, first_meta = image_items[0]
+        draw.text((config.grid_margin, config.grid_margin), _header_text(first_path, first_meta, config), font=f, fill=config.font_settings.font_color)
 
     current_x = config.grid_margin
     current_y = config.grid_margin + header_height
     info_font = _load_font(config.font_settings.get_font_path(), config.font_settings.size)
     radius_scale_factor = cell_w / 480.0 if cell_w > 0 else 1.0
 
-    for i, path in enumerate(image_paths):
+    for i, (path, meta) in enumerate(image_items):
         try:
             with Image.open(path) as img:
                 # 1. Rotate
@@ -222,7 +258,7 @@ def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger
 
                 if config.font_settings.frame_info_show:
                     d_tmp = ImageDraw.Draw(img)
-                    label = f"TC: {i}" if config.font_settings.frame_info_type == "timecode" else f"#{i}"
+                    label = _frame_info_label(meta, i, config.font_settings)
                     _draw_frame_info(d_tmp, label, img.width, img.height, config.font_settings, info_font)
 
                 grid_image.paste(img, (paste_x, paste_y), mask=img)
@@ -243,85 +279,103 @@ def _create_fixed_column_grid(image_paths: List[str], config: GridConfig, logger
 
 def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig, logger: logging.Logger):
     """Timeline layout (Variable width rows)."""
-    # ... (Unchanged logic for timeline, but ensures output_width is respected) ...
-    # Re-using previous implementation but mapping output_width correctly.
     layout_data = []
     if not source_data: return False, []
 
     target_h = config.target_row_height
-    max_w = config.output_width - (2 * config.grid_margin)
-    
+    max_w = max(1, config.output_width - (2 * config.grid_margin))
+
     rows = []
     current_row = []
     current_row_width = 0
-    
-    items = []
-    for item in source_data:
+
+    source_items = [_coerce_image_item(item) for item in source_data]
+    width_ratios = []
+    for _path, meta in source_items:
         try:
-            with Image.open(item['image_path']) as img:
+            width_ratios.append(max(0.01, float(meta.get("width_ratio", 1.0))))
+        except (TypeError, ValueError):
+            width_ratios.append(1.0)
+    average_ratio = sum(width_ratios) / len(width_ratios) if width_ratios else 1.0
+
+    items = []
+    for index, (path, meta) in enumerate(source_items):
+        if not path:
+            continue
+        try:
+            with Image.open(path) as img:
                  native_w, native_h = img.size
                  aspect = native_w / native_h
-                 base_w = int(target_h * aspect)
-                 items.append({'path': item['image_path'], 'w': base_w, 'h': target_h})
+                 try:
+                     ratio = max(0.01, float(meta.get("width_ratio", 1.0)))
+                 except (TypeError, ValueError):
+                     ratio = 1.0
+                 duration_factor = max(0.35, min(3.0, ratio / average_ratio))
+                 base_w = max(1, min(max_w, int(target_h * aspect * duration_factor)))
+                 items.append({'path': path, 'w': base_w, 'h': target_h, 'meta': meta, 'index': index})
         except Exception as e:
-            logger.warning(f"Could not inspect timeline source '{item.get('image_path')}': {e}")
+            logger.warning(f"Could not inspect timeline source '{path}': {e}")
             continue
 
+    if not items:
+        return False, []
+
     for item in items:
-        if current_row_width + item['w'] + config.padding > max_w:
+        if current_row and current_row_width + item['w'] + config.padding > max_w:
             rows.append(current_row)
             current_row = []
             current_row_width = 0
         current_row.append(item)
         current_row_width += item['w'] + config.padding
     if current_row: rows.append(current_row)
-    
+
     header_height = 50 if config.font_settings.show_header else 0
     total_grid_h = (len(rows) * (target_h + config.padding)) + header_height + (2 * config.grid_margin)
-    
+
     try:
         bg_rgb = ImageColor.getrgb(config.bg_color_hex)
         grid_image = Image.new("RGB", (config.output_width, total_grid_h), bg_rgb)
     except: return False, []
-    
+
     draw = ImageDraw.Draw(grid_image)
     if config.font_settings.show_header and source_data:
         f = _load_font(config.font_settings.get_font_path(), 20)
-        draw.text((config.grid_margin, config.grid_margin), os.path.basename(source_data[0]['image_path']), font=f, fill=config.font_settings.font_color)
-        
+        first_path, first_meta = source_items[0]
+        draw.text((config.grid_margin, config.grid_margin), _header_text(first_path, first_meta, config), font=f, fill=config.font_settings.font_color)
+
     y = config.grid_margin + header_height
     info_font = _load_font(config.font_settings.get_font_path(), config.font_settings.size)
-    
+
     for row in rows:
         x = config.grid_margin
         row_content_w = sum(i['w'] for i in row) + ((len(row)-1) * config.padding)
         available_w = max_w
-        
+
         scale = 1.0
-        if row_content_w > 0 and row != rows[-1]:
+        if row_content_w > 0 and (len(rows) == 1 or row != rows[-1] or row_content_w > available_w):
              scale = available_w / row_content_w
-        
+
         for item in row:
             try:
                 draw_w = int(item['w'] * scale)
-                draw_h = target_h 
-                
+                draw_h = target_h
+
                 with Image.open(item['path']) as img:
                     img = _apply_rotation(img, config.rotation)
                     img = img.convert("RGBA")
                     img = img.resize((draw_w, target_h), Image.Resampling.BICUBIC)
-                    
+
                     if config.rounded_corners > 0:
-                        radius_scale_factor = target_h / 150.0 
+                        radius_scale_factor = target_h / 150.0
                         scaled_radius = int(config.rounded_corners * radius_scale_factor)
                         scaled_radius = max(1, scaled_radius)
                         img = _apply_rounding(img, scaled_radius)
 
-                    grid_image.paste(img, (x, y), mask=img)
-                    
                     if config.font_settings.frame_info_show:
                         d_tmp = ImageDraw.Draw(img)
-                        _draw_frame_info(d_tmp, "Shot", draw_w, target_h, config.font_settings, info_font)
+                        _draw_frame_info(d_tmp, _frame_info_label(item['meta'], item['index'], config.font_settings), draw_w, target_h, config.font_settings, info_font)
+
+                    grid_image.paste(img, (x, y), mask=img)
                     
                     layout_data.append({'image_path': item['path'], 'x': x, 'y': y, 'width': draw_w, 'height': target_h})
                     x += draw_w + int(config.padding * scale)
@@ -338,6 +392,9 @@ def create_image_grid(**kwargs):
     """Adapter function."""
     font_conf = FontConfig(
         show_header=kwargs.get("show_header", True),
+        show_file_path=kwargs.get("show_file_path", True),
+        show_timecode=kwargs.get("show_timecode", True),
+        show_frame_num=kwargs.get("show_frame_num", True),
         frame_info_show=kwargs.get("frame_info_show", False),
         frame_info_type=kwargs.get("frame_info_timecode_or_frame", "timecode"),
         font_color=kwargs.get("frame_info_font_color", "#FFFFFF"),
@@ -349,6 +406,7 @@ def create_image_grid(**kwargs):
 
     grid_conf = GridConfig(
         output_path=kwargs.get("output_path", ""),
+        header_title=kwargs.get("header_title", ""),
         columns=kwargs.get("columns", 5),
         rows=kwargs.get("rows", 5), # Passed explicitly
         padding=kwargs.get("padding", 5),
