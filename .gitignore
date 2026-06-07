@@ -155,3 +155,5 @@ cython_debug/
 # Custom Build Artifacts
 .venv_build/
 movieprint_gui_settings.json
+pymovieprint_session.log
+bench_out/
