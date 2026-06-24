@@ -71,11 +71,25 @@ ctk.set_appearance_mode("Dark")
 class Theme:
     BG_PRIMARY = "#121212"
     BG_SECONDARY = "#1E1E1E"
+    BG_TERTIARY = "#252525"
+
+    PANEL = "#1A1A1A"
+    PANEL_SOFT = "#242424"
+
     ACCENT_CYAN = "#008B8B"
     ACCENT_GLOW = "#00FFFF"
+    ACCENT_BLUE = ACCENT_CYAN
+
+    ACTION_GOLD = "#D6A94A"
+    ACTION_GOLD_HOVER = "#E5B85C"
+
     TEXT_MAIN = "#FFFFFF"
     TEXT_MUTED = "#888888"
+
     BUTTON_HOVER = "#00CED1"
+    BUTTON_SUBTLE = "#2A2A2A"
+    BUTTON_SUBTLE_HOVER = "#333333"
+
     FONT_HEADER = ("Impact", 60)
     FONT_SUB = ("Roboto", 16)
     FONT_BOLD = ("Roboto", 12, "bold")
@@ -328,20 +342,22 @@ class ZoomableCanvas(ctk.CTkFrame):
         self.canvas.configure(scrollregion=(0,0,0,0))
 
 class CTkCollapsibleFrame(ctk.CTkFrame):
-    def __init__(self, master, title="", **kwargs):
+    def __init__(self, master, title="", start_open=True, **kwargs):
         super().__init__(master, **kwargs)
         self.grid_columnconfigure(0, weight=1)
-        self.variable = ctk.BooleanVar(value=True)
+        self.variable = ctk.BooleanVar(value=start_open)
         self.title_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.title_frame.grid(row=0, column=0, sticky="ew")
         self.title_frame.grid_columnconfigure(1, weight=1)
         self.toggle_button = ctk.CTkButton(
-            self.title_frame, text=f"- {title}", command=self.toggle, width=30,
+            self.title_frame, text=f"{'-' if start_open else '+'} {title}", command=self.toggle, width=30,
             fg_color="transparent", text_color=Theme.ACCENT_CYAN, hover=False, anchor="w", font=Theme.FONT_BOLD
         )
         self.toggle_button.grid(row=0, column=0, sticky="w")
         self.sub_frame = ctk.CTkFrame(self, fg_color="transparent")
         self.sub_frame.grid(row=1, column=0, sticky="nsew", padx=10, pady=5)
+        if not start_open:
+            self.sub_frame.grid_remove()
 
     def toggle(self):
         if self.variable.get():
@@ -489,13 +505,13 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         btn_frame.grid(row=0, column=2, sticky="e", padx=20, pady=10)
         
         self.preview_btn = ctk.CTkButton(btn_frame, text="PREVIEW", command=self.start_thumbnail_preview_generation,
-                      fg_color="transparent", border_width=1, border_color=Theme.ACCENT_CYAN,
-                      text_color=Theme.ACCENT_CYAN)
+                      fg_color="transparent", border_width=1, border_color=Theme.ACCENT_BLUE,
+                      text_color=Theme.ACCENT_BLUE, hover_color=Theme.BUTTON_SUBTLE_HOVER)
         self.preview_btn.pack(side="left", padx=5)
         
         ctk.CTkButton(btn_frame, text="APPLY / SAVE", command=self.generate_movieprint_action,
-                      fg_color=Theme.ACCENT_CYAN, text_color=Theme.BG_PRIMARY,
-                      hover_color=Theme.BUTTON_HOVER, font=Theme.FONT_BOLD, width=150).pack(side="left", padx=5)
+                      fg_color=Theme.ACTION_GOLD, text_color=Theme.BG_PRIMARY,
+                      hover_color=Theme.ACTION_GOLD_HOVER, font=Theme.FONT_BOLD, width=150).pack(side="left", padx=5)
 
     def _create_landing_page(self, parent):
         parent.grid_columnconfigure(0, weight=1)
@@ -576,20 +592,20 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     self.hero_canvas.create_rectangle(x1, y2-2, x1 + (cell_w * 0.3), y2, fill=color_highlight, outline="")
 
     def _create_grid_controller(self, parent):
-        self.live_math_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.live_math_frame = ctk.CTkFrame(parent, fg_color=Theme.PANEL_SOFT, corner_radius=8)
         self.live_math_frame.pack(fill="x", padx=10, pady=20)
         font_lg = ("Roboto", 32, "bold")
         
         self.math_lbl_cols = ctk.CTkLabel(self.live_math_frame, text="5", font=font_lg, text_color="white")
         self.math_lbl_cols.pack(side="left", expand=True)
-        ctk.CTkLabel(self.live_math_frame, text="×", font=("Roboto", 24), text_color=Theme.TEXT_MUTED).pack(side="left")
+        ctk.CTkLabel(self.live_math_frame, text="x", font=("Roboto", 24), text_color=Theme.TEXT_MUTED).pack(side="left")
         self.math_lbl_rows = ctk.CTkLabel(self.live_math_frame, text="?", font=font_lg, text_color="white")
         self.math_lbl_rows.pack(side="left", expand=True)
         ctk.CTkLabel(self.live_math_frame, text="=", font=("Roboto", 24), text_color=Theme.TEXT_MUTED).pack(side="left")
         self.math_lbl_res = ctk.CTkLabel(self.live_math_frame, text="?", font=font_lg, text_color=Theme.ACCENT_CYAN)
         self.math_lbl_res.pack(side="left", expand=True)
 
-        self.input_tabs = ctk.CTkTabview(parent, fg_color="transparent", text_color=Theme.TEXT_MAIN, 
+        self.input_tabs = ctk.CTkTabview(parent, fg_color=Theme.PANEL, text_color=Theme.TEXT_MAIN,
                                          segmented_button_selected_color=Theme.ACCENT_CYAN,
                                          segmented_button_selected_hover_color=Theme.BUTTON_HOVER,
                                          command=self._on_tab_change)
@@ -598,21 +614,21 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.input_tabs.add("Batch Queue")
         
         single_tab = self.input_tabs.tab("Single Source")
-        self.input_entry = ctk.CTkEntry(single_tab, textvariable=self.input_paths_var, placeholder_text="Drag file here...", border_color=Theme.ACCENT_CYAN)
+        self.input_entry = ctk.CTkEntry(single_tab, textvariable=self.input_paths_var, placeholder_text="Drag file here...", border_color=Theme.BG_TERTIARY)
         self.input_entry.pack(fill="x", padx=0, pady=(10,5))
         if self.dnd_active:
             try:
                 self.input_entry.drop_target_register(DND_FILES)
                 self.input_entry.dnd_bind('<<Drop>>', self.handle_drop)
             except Exception: pass
-        ctk.CTkButton(single_tab, text="Browse", command=self.browse_input_paths, fg_color=Theme.ACCENT_CYAN, 
-                      text_color=Theme.BG_PRIMARY, hover_color=Theme.BUTTON_HOVER).pack(fill="x", padx=0, pady=10)
+        ctk.CTkButton(single_tab, text="Browse", command=self.browse_input_paths, fg_color=Theme.BUTTON_SUBTLE,
+                      text_color=Theme.TEXT_MAIN, hover_color=Theme.BUTTON_SUBTLE_HOVER).pack(fill="x", padx=0, pady=10)
 
         batch_tab = self.input_tabs.tab("Batch Queue")
-        list_container = ctk.CTkFrame(batch_tab, fg_color="#2B2B2B", height=150)
+        list_container = ctk.CTkFrame(batch_tab, fg_color=Theme.BG_TERTIARY, height=150)
         list_container.pack(fill="x", padx=0, pady=(10,5))
         list_container.pack_propagate(False)
-        self.batch_listbox = tk.Listbox(list_container, bg="#2B2B2B", fg="white", borderwidth=0, highlightthickness=0, selectmode="extended")
+        self.batch_listbox = tk.Listbox(list_container, bg=Theme.BG_TERTIARY, fg="white", borderwidth=0, highlightthickness=0, selectmode="extended")
         self.batch_listbox.pack(side="left", fill="both", expand=True, padx=5, pady=5)
         scrollbar = ctk.CTkScrollbar(list_container, command=self.batch_listbox.yview, fg_color="transparent")
         scrollbar.pack(side="right", fill="y")
@@ -624,8 +640,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
              except Exception: pass
         batch_ctrl_frame = ctk.CTkFrame(batch_tab, fg_color="transparent")
         batch_ctrl_frame.pack(fill="x", pady=5)
-        ctk.CTkButton(batch_ctrl_frame, text="Clear", command=self.clear_batch_list, width=60, fg_color="#333333", hover_color="#555555").pack(side="left", padx=(0,5))
-        ctk.CTkButton(batch_ctrl_frame, text="Remove Selected", command=self.remove_batch_item, width=100, fg_color="#333333", hover_color="#555555").pack(side="left")
+        ctk.CTkButton(batch_ctrl_frame, text="Clear", command=self.clear_batch_list, width=60, fg_color=Theme.BUTTON_SUBTLE, hover_color=Theme.BUTTON_SUBTLE_HOVER).pack(side="left", padx=(0,5))
+        ctk.CTkButton(batch_ctrl_frame, text="Remove Selected", command=self.remove_batch_item, width=120, fg_color=Theme.BUTTON_SUBTLE, hover_color=Theme.BUTTON_SUBTLE_HOVER).pack(side="left")
         
         # --- NEW: Recursive Checkbox ---
         ctk.CTkCheckBox(parent, text="Recursive Folder Scan", variable=self.recursive_scan_var, 
@@ -634,20 +650,20 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._create_cyber_slider_section(parent)
         
         # --- NEW: Output Dimensions Section ---
-        dims_frame = CTkCollapsibleFrame(parent, title="Output Dimensions")
+        dims_frame = CTkCollapsibleFrame(parent, title="Output")
         dims_frame.pack(fill="x", padx=10, pady=5)
         self._populate_dimensions_settings(dims_frame.get_content_frame())
 
-        adv_frame = CTkCollapsibleFrame(parent, title="Advanced Settings")
+        adv_frame = CTkCollapsibleFrame(parent, title="Advanced", start_open=False)
         adv_frame.pack(fill="x", padx=10, pady=5)
         self._populate_advanced_settings(adv_frame.get_content_frame())
 
-        hdr_frame = CTkCollapsibleFrame(parent, title="HDR & Color")
+        hdr_frame = CTkCollapsibleFrame(parent, title="HDR & Color", start_open=False)
         hdr_frame.pack(fill="x", padx=10, pady=5)
         self._populate_hdr_settings(hdr_frame.get_content_frame())
 
     def _create_cyber_slider_section(self, parent):
-        self.slider_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        self.slider_frame = ctk.CTkFrame(parent, fg_color=Theme.PANEL, corner_radius=8)
         self.slider_frame.pack(fill="x", padx=10, pady=10)
         
         ctk.CTkLabel(self.slider_frame, text="COLUMNS", font=Theme.FONT_BOLD, text_color=Theme.TEXT_MAIN).pack(anchor="w")
@@ -684,7 +700,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         h_entry.pack(side="left")
         h_entry.bind("<Return>", lambda e: self.quick_refresh_layout())
 
-        ctk.CTkLabel(parent, text="ℹ Thumbnails will crop to fit exactly.", font=("Roboto", 10), text_color=Theme.TEXT_MUTED).pack(anchor="w", pady=(5,0))
+        ctk.CTkLabel(parent, text="Thumbnails will crop to fit exactly.", font=("Roboto", 10), text_color=Theme.TEXT_MUTED).pack(anchor="w", pady=(5,0))
 
     def _populate_advanced_settings(self, parent):
         ctk.CTkLabel(parent, text="Extraction Mode:").pack(anchor="w", pady=(5, 0))
@@ -729,7 +745,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._toggle_naming_inputs(self.output_naming_mode_var.get())
         
         ctk.CTkLabel(parent, text="Output Location:", text_color=Theme.TEXT_MUTED).pack(anchor="w", pady=(15, 0))
-        ctk.CTkLabel(parent, text="ℹ Files will be saved alongside source videos.", font=Theme.FONT_BOLD).pack(anchor="w", pady=(0, 5))
+        ctk.CTkLabel(parent, text="Movieprints save alongside source videos.", font=Theme.FONT_BOLD, text_color=Theme.TEXT_MUTED).pack(anchor="w", pady=(0, 5))
 
         self.output_frames_only_cb = ctk.CTkCheckBox(
             parent,
@@ -737,23 +753,25 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             variable=self.output_frames_only_var,
             fg_color=Theme.ACCENT_CYAN,
             hover_color=Theme.BUTTON_HOVER,
+            command=self._toggle_frame_export_options,
         )
         self.output_frames_only_cb.pack(anchor="w", pady=(4, 2))
 
-        frames_dir_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        frames_dir_frame.pack(fill="x", pady=(0, 8))
+        self.frames_dir_frame = ctk.CTkFrame(parent, fg_color="transparent")
         ctk.CTkEntry(
-            frames_dir_frame,
+            self.frames_dir_frame,
             textvariable=self.individual_frames_output_dir_var,
             placeholder_text="Optional folder for exported frames",
         ).pack(side="left", fill="x", expand=True)
         ctk.CTkButton(
-            frames_dir_frame,
+            self.frames_dir_frame,
             text="Browse",
             width=70,
             command=self.browse_output_dir,
-            fg_color=Theme.BG_SECONDARY,
+            fg_color=Theme.BUTTON_SUBTLE,
+            hover_color=Theme.BUTTON_SUBTLE_HOVER,
         ).pack(side="left", padx=(6, 0))
+        self._toggle_frame_export_options()
 
         # --- NEW: Overwrite Switch ---
         ctk.CTkLabel(parent, text="Existing Files:").pack(anchor="w", pady=(5,0))
@@ -784,8 +802,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         ctk.CTkLabel(parent, text="Background Color:").pack(anchor="w", pady=(10,0))
         ctk.CTkEntry(parent, textvariable=self.background_color_var).pack(fill="x", pady=5)
-        ctk.CTkButton(parent, text="Pick Color", command=lambda: [self.pick_bg_color(), self.quick_refresh_layout()], 
-                      width=80, fg_color=Theme.BG_SECONDARY).pack(anchor="w")
+        ctk.CTkButton(parent, text="Pick Color", command=lambda: [self.pick_bg_color(), self.quick_refresh_layout()],
+                      width=90, fg_color=Theme.BUTTON_SUBTLE, hover_color=Theme.BUTTON_SUBTLE_HOVER).pack(anchor="w")
 
         ctk.CTkLabel(parent, text="Output Format:").pack(anchor="w", pady=(10, 0))
         self.format_seg = ctk.CTkSegmentedButton(parent, values=["jpg", "png"], variable=self.frame_format_var, 
@@ -816,6 +834,21 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self.hdr_algo_frame.pack(fill="x", padx=20, pady=5)
         else:
             self.hdr_algo_frame.pack_forget()
+
+
+    def _toggle_frame_export_options(self):
+        """Show the optional individual-frame export folder picker only when needed."""
+        if not hasattr(self, "frames_dir_frame"):
+            return
+        try:
+            enabled = bool(self.output_frames_only_var.get())
+        except Exception:
+            enabled = False
+
+        if enabled:
+            self.frames_dir_frame.pack(fill="x", pady=(2, 8))
+        else:
+            self.frames_dir_frame.pack_forget()
 
     def _toggle_naming_inputs(self, mode=None):
         if mode is None: mode = self.output_naming_mode_var.get()

@@ -13,6 +13,7 @@ import math
 import json
 import sys
 from pathlib import Path
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional, Tuple, Union
 
 # --- Optional Dependency Handling ---
@@ -258,10 +259,16 @@ class VideoExtractor:
         
         fps, _, _ = self.properties
         if fps <= 0: fps = 24.0
+        total_frames = len(timestamps)
 
         # Safety Lock for HDR Tone Mapping
         use_gpu = False
-        if not hdr_tonemap and VideoUtils.check_ffmpeg_gpu(self.logger):
+        gpu_preference = os.getenv("PYMOVIEPRINT_TIMESTAMP_GPU", "").strip().lower()
+        gpu_disabled = gpu_preference in {"0", "false", "no", "off"}
+        gpu_enabled = gpu_preference in {"1", "true", "yes", "on"}
+        prefer_gpu = gpu_enabled or (total_frames == 1 and not gpu_disabled)
+
+        if not hdr_tonemap and prefer_gpu and VideoUtils.check_ffmpeg_gpu(self.logger):
              use_gpu = True
              # Log once per batch to avoid spam
              if hasattr(self, '_logged_gpu'): pass
@@ -273,20 +280,19 @@ class VideoExtractor:
              pass
 
         hdr_filters = self._build_hdr_filter_chain(hdr_algorithm) if hdr_tonemap else ""
-        total_frames = len(timestamps)
         
-        for i, ts in enumerate(timestamps):
+        def extract_one(i, ts):
             if not fast_preview:
                 self.logger.info(f"  ... Extracting frame {i+1}/{total_frames} at {ts:.2f}s ...")
-            
+
             # Construct Filter Chain
             filters = []
             if hdr_tonemap:
                 filters.append(hdr_filters)
-            
+
             if fast_preview:
                 filters.append("scale=480:-1")
-            
+
             # Ensure standard pixel format for output if not handled by tone mapper
             if not hdr_tonemap:
                 filters.append("format=yuv420p")
@@ -300,11 +306,11 @@ class VideoExtractor:
             cmd = [FFMPEG_BIN]
             if use_gpu:
                 cmd.extend(['-hwaccel', 'cuda'])
-            
+
             # Input Seeking: Fast and precise
-            cmd.extend(['-ss', str(ts)]) 
+            cmd.extend(['-ss', str(ts)])
             cmd.extend(['-i', self.video_path])
-            
+
             cmd.extend([
                 '-frames:v', '1',
                 '-vf', vf_filter,
@@ -314,14 +320,40 @@ class VideoExtractor:
             ])
 
             success = VideoUtils.run_ffmpeg_command(cmd, self.logger)
-            
+
             if success and os.path.exists(final_path):
-                results.append({
+                return {
                     'frame_path': final_path,
                     'frame_number': int(ts * fps),
                     'timestamp_sec': ts,
                     'video_filename': self.video_filename
-                })
+                }
+            return None
+
+        max_workers = 1
+        if total_frames > 1 and not use_gpu and not hdr_tonemap:
+            env_workers = os.getenv("PYMOVIEPRINT_FFMPEG_WORKERS")
+            if env_workers:
+                try:
+                    max_workers = max(1, int(env_workers))
+                except ValueError:
+                    self.logger.warning("Ignoring invalid PYMOVIEPRINT_FFMPEG_WORKERS value: %s", env_workers)
+            else:
+                max_workers = min(4, total_frames, os.cpu_count() or 1)
+
+        if max_workers == 1:
+            for i, ts in enumerate(timestamps):
+                result = extract_one(i, ts)
+                if result:
+                    results.append(result)
+        else:
+            self.logger.info(f"  Extracting frames with {max_workers} parallel FFmpeg workers.")
+            with ThreadPoolExecutor(max_workers=max_workers) as executor:
+                futures = [executor.submit(extract_one, i, ts) for i, ts in enumerate(timestamps)]
+                for future in as_completed(futures):
+                    result = future.result()
+                    if result:
+                        results.append(result)
 
         results.sort(key=lambda x: x['timestamp_sec'])
         return results
