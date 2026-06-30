@@ -46,6 +46,7 @@ class ProjectSettings:
     hdr_algorithm: str = "hable"  # "hable", "reinhard", "mobius"
     
     # Styling - Background & Metrics
+    ui_theme: str = "Teal"
     background_color: str = "#1e1e1e"
     padding: int = 5
     grid_margin: int = 0
