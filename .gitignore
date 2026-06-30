@@ -157,3 +157,4 @@ cython_debug/
 movieprint_gui_settings.json
 pymovieprint_session.log
 bench_out/
+automation/

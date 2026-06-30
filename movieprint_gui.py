@@ -69,30 +69,80 @@ SETTINGS_FILE = "movieprint_gui_settings.json"
 ctk.set_appearance_mode("Dark")
 
 class Theme:
-    BG_PRIMARY = "#121212"
-    BG_SECONDARY = "#1E1E1E"
-    BG_TERTIARY = "#252525"
-
-    PANEL = "#1A1A1A"
-    PANEL_SOFT = "#242424"
-
-    ACCENT_CYAN = "#008B8B"
-    ACCENT_GLOW = "#00FFFF"
-    ACCENT_BLUE = ACCENT_CYAN
-
-    ACTION_GOLD = "#D6A94A"
-    ACTION_GOLD_HOVER = "#E5B85C"
+    PRESETS = {
+        "Teal": {
+            "BG_PRIMARY": "#020707",
+            "BG_SECONDARY": "#071111",
+            "BG_TERTIARY": "#102222",
+            "PANEL": "#0A1717",
+            "PANEL_SOFT": "#112828",
+            "ACCENT_BLUE": "#00B3A4",
+            "ACCENT_BLUE_HOVER": "#17D6C8",
+            "ACCENT_GREEN": "#008F83",
+            "ACCENT_GREEN_HOVER": "#00B3A4",
+            "ACTION_GOLD": "#35E0D0",
+            "ACTION_GOLD_HOVER": "#62F0E4",
+            "DANGER_RED": "#00675F",
+            "DANGER_RED_HOVER": "#008F83",
+            "TEXT_MUTED": "#8AA7A3",
+        },
+        "Yellow": {
+            "BG_PRIMARY": "#080704",
+            "BG_SECONDARY": "#121006",
+            "BG_TERTIARY": "#25200B",
+            "PANEL": "#191607",
+            "PANEL_SOFT": "#2B250D",
+            "ACCENT_BLUE": "#E5B80B",
+            "ACCENT_BLUE_HOVER": "#FFD449",
+            "ACCENT_GREEN": "#C99A00",
+            "ACCENT_GREEN_HOVER": "#E5B80B",
+            "ACTION_GOLD": "#FFE066",
+            "ACTION_GOLD_HOVER": "#FFEB91",
+            "DANGER_RED": "#8A6900",
+            "DANGER_RED_HOVER": "#B88C00",
+            "TEXT_MUTED": "#B5AA83",
+        },
+        "Dark Green": {
+            "BG_PRIMARY": "#020702",
+            "BG_SECONDARY": "#071107",
+            "BG_TERTIARY": "#112312",
+            "PANEL": "#0A170B",
+            "PANEL_SOFT": "#122914",
+            "ACCENT_BLUE": "#2E8B43",
+            "ACCENT_BLUE_HOVER": "#43A95A",
+            "ACCENT_GREEN": "#1F6F32",
+            "ACCENT_GREEN_HOVER": "#2E8B43",
+            "ACTION_GOLD": "#69C779",
+            "ACTION_GOLD_HOVER": "#83DD91",
+            "DANGER_RED": "#195626",
+            "DANGER_RED_HOVER": "#237235",
+            "TEXT_MUTED": "#8EA68F",
+        },
+    }
+    PRESET_NAMES = list(PRESETS.keys())
+    CURRENT = "Teal"
 
     TEXT_MAIN = "#FFFFFF"
-    TEXT_MUTED = "#888888"
-
-    BUTTON_HOVER = "#00CED1"
-    BUTTON_SUBTLE = "#2A2A2A"
-    BUTTON_SUBTLE_HOVER = "#333333"
+    TEXT_DARK = "#020707"
+    BUTTON_SUBTLE = "#142020"
+    BUTTON_SUBTLE_HOVER = "#1C3030"
 
     FONT_HEADER = ("Impact", 60)
     FONT_SUB = ("Roboto", 16)
     FONT_BOLD = ("Roboto", 12, "bold")
+
+    @classmethod
+    def apply_preset(cls, name: str):
+        if name not in cls.PRESETS:
+            name = "Teal"
+        cls.CURRENT = name
+        for key, value in cls.PRESETS[name].items():
+            setattr(cls, key, value)
+        cls.TEXT_DARK = cls.BG_PRIMARY
+        cls.BUTTON_SUBTLE = cls.BG_TERTIARY
+        cls.BUTTON_SUBTLE_HOVER = cls.PANEL_SOFT
+
+Theme.apply_preset("Teal")
 
 # --- LOGGING SETUP ---
 def setup_file_logging():
@@ -351,7 +401,7 @@ class CTkCollapsibleFrame(ctk.CTkFrame):
         self.title_frame.grid_columnconfigure(1, weight=1)
         self.toggle_button = ctk.CTkButton(
             self.title_frame, text=f"{'-' if start_open else '+'} {title}", command=self.toggle, width=30,
-            fg_color="transparent", text_color=Theme.ACCENT_CYAN, hover=False, anchor="w", font=Theme.FONT_BOLD
+            fg_color="transparent", text_color=Theme.ACCENT_BLUE, hover=False, anchor="w", font=Theme.FONT_BOLD
         )
         self.toggle_button.grid(row=0, column=0, sticky="w")
         self.sub_frame = ctk.CTkFrame(self, fg_color="transparent")
@@ -384,6 +434,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         self.title(f"PyMoviePrint Generator v{DependencyManager.version}")
         self.geometry("1500x950")
+        Theme.apply_preset(self._read_persistent_ui_theme())
         self.configure(fg_color=Theme.BG_PRIMARY)
         
         self._init_dnd()
@@ -394,6 +445,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.queue = queue.Queue()
         self.preview_temp_dir: Optional[str] = None
         self.is_landing_state = True
+        self.is_busy = False
+        self._applying_theme = False
+        self._loading_persistent_settings = False
         
         self.state_manager = DependencyManager.state_manager_cls()
         self._init_variables_dynamic()
@@ -414,6 +468,16 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.bind("<Control-z>", self.perform_undo)
         self.bind("<Control-y>", self.perform_redo)
         self._update_live_math()
+
+    @staticmethod
+    def _read_persistent_ui_theme():
+        try:
+            if os.path.exists(SETTINGS_FILE):
+                with open(SETTINGS_FILE, 'r') as f:
+                    return json.load(f).get("ui_theme", "Teal")
+        except Exception:
+            pass
+        return "Teal"
 
     def _init_dnd(self):
         self.dnd_active = False
@@ -486,7 +550,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.toolbar_frame.grid(row=1, column=1, sticky="ew", padx=10)
         ctk.CTkLabel(self.toolbar_frame, text="Zoom:", text_color=Theme.TEXT_MUTED).pack(side="left", padx=5)
         self.zoom_slider = ctk.CTkSlider(self.toolbar_frame, from_=0.1, to=5.0, variable=self.zoom_level_var, 
-                                        command=self.preview_zoomable_canvas.set_zoom, width=150, progress_color=Theme.ACCENT_CYAN)
+                                        command=self.preview_zoomable_canvas.set_zoom, width=150, progress_color=Theme.ACCENT_BLUE)
         self.zoom_slider.pack(side="left", padx=5)
 
     def _build_action_footer(self):
@@ -497,7 +561,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.status_lbl = ctk.CTkLabel(self.action_frame, text="Ready", text_color=Theme.TEXT_MUTED)
         self.status_lbl.grid(row=0, column=0, sticky="w", padx=20)
         
-        self.progress_bar = ctk.CTkProgressBar(self.action_frame, width=300, progress_color=Theme.ACCENT_CYAN)
+        self.progress_bar = ctk.CTkProgressBar(self.action_frame, width=300, progress_color=Theme.ACCENT_GREEN)
         self.progress_bar.set(0)
         self.progress_bar.grid(row=0, column=1, padx=20)
         
@@ -509,9 +573,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                       text_color=Theme.ACCENT_BLUE, hover_color=Theme.BUTTON_SUBTLE_HOVER)
         self.preview_btn.pack(side="left", padx=5)
         
-        ctk.CTkButton(btn_frame, text="APPLY / SAVE", command=self.generate_movieprint_action,
-                      fg_color=Theme.ACTION_GOLD, text_color=Theme.BG_PRIMARY,
-                      hover_color=Theme.ACTION_GOLD_HOVER, font=Theme.FONT_BOLD, width=150).pack(side="left", padx=5)
+        self.save_btn = ctk.CTkButton(btn_frame, text="APPLY / SAVE", command=self.generate_movieprint_action,
+                                      fg_color=Theme.ACTION_GOLD, text_color=Theme.TEXT_DARK,
+                                      hover_color=Theme.ACTION_GOLD_HOVER, font=Theme.FONT_BOLD, width=150)
+        self.save_btn.pack(side="left", padx=5)
 
     def _create_landing_page(self, parent):
         parent.grid_columnconfigure(0, weight=1)
@@ -527,12 +592,16 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         
         workflow_frame = ctk.CTkFrame(parent, fg_color="transparent")
         workflow_frame.grid(row=5, column=0, pady=40)
-        steps = [("1", "Drag & Drop", "Video files"), ("2", "Customize", "Layout & Style"), ("3", "Save", "Export Image")]
+        steps = [
+            ("1", "Drag & Drop", "Video files", Theme.ACCENT_BLUE),
+            ("2", "Customize", "Layout & Style", Theme.ACCENT_GREEN),
+            ("3", "Save", "Export Image", Theme.ACTION_GOLD),
+        ]
         
-        for i, (num, title, desc) in enumerate(steps):
+        for i, (num, title, desc, color) in enumerate(steps):
             f = ctk.CTkFrame(workflow_frame, fg_color="transparent")
             f.grid(row=0, column=i, padx=40)
-            ctk.CTkLabel(f, text=num, font=("Roboto", 40, "bold"), text_color=Theme.ACCENT_CYAN).pack()
+            ctk.CTkLabel(f, text=num, font=("Roboto", 40, "bold"), text_color=color).pack()
             ctk.CTkLabel(f, text=title, font=Theme.FONT_BOLD, text_color=Theme.TEXT_MAIN).pack()
             ctk.CTkLabel(f, text=desc, font=("Roboto", 12), text_color=Theme.TEXT_MUTED).pack()
             
@@ -559,10 +628,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         rows = 3
         gap = 12  # Spacing between frames
         
-        # Colors (Hardcoded to match Theme context without relying on missing attrs)
-        color_frame = "#252525"  # Dark Grey (Frame placeholder)
-        color_tc = "#333333"     # Darker Grey (Timecode placeholder)
-        color_highlight = Theme.ACCENT_CYAN # Use the existing Cyan accent
+        color_frame = Theme.BG_TERTIARY
+        color_tc = Theme.PANEL_SOFT
+        color_highlight = Theme.ACCENT_BLUE
         
         # Calculate cell dimensions to fit perfectly with gaps
         # Formula: Total Width = (Cols * CellW) + ((Cols + 1) * Gap)
@@ -602,12 +670,12 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.math_lbl_rows = ctk.CTkLabel(self.live_math_frame, text="?", font=font_lg, text_color="white")
         self.math_lbl_rows.pack(side="left", expand=True)
         ctk.CTkLabel(self.live_math_frame, text="=", font=("Roboto", 24), text_color=Theme.TEXT_MUTED).pack(side="left")
-        self.math_lbl_res = ctk.CTkLabel(self.live_math_frame, text="?", font=font_lg, text_color=Theme.ACCENT_CYAN)
+        self.math_lbl_res = ctk.CTkLabel(self.live_math_frame, text="?", font=font_lg, text_color=Theme.ACTION_GOLD)
         self.math_lbl_res.pack(side="left", expand=True)
 
         self.input_tabs = ctk.CTkTabview(parent, fg_color=Theme.PANEL, text_color=Theme.TEXT_MAIN,
-                                         segmented_button_selected_color=Theme.ACCENT_CYAN,
-                                         segmented_button_selected_hover_color=Theme.BUTTON_HOVER,
+                                         segmented_button_selected_color=Theme.ACCENT_BLUE,
+                                         segmented_button_selected_hover_color=Theme.ACCENT_BLUE_HOVER,
                                          command=self._on_tab_change)
         self.input_tabs.pack(fill="x", padx=10, pady=(0, 5))
         self.input_tabs.add("Single Source")
@@ -621,8 +689,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 self.input_entry.drop_target_register(DND_FILES)
                 self.input_entry.dnd_bind('<<Drop>>', self.handle_drop)
             except Exception: pass
-        ctk.CTkButton(single_tab, text="Browse", command=self.browse_input_paths, fg_color=Theme.BUTTON_SUBTLE,
-                      text_color=Theme.TEXT_MAIN, hover_color=Theme.BUTTON_SUBTLE_HOVER).pack(fill="x", padx=0, pady=10)
+        ctk.CTkButton(single_tab, text="Browse", command=self.browse_input_paths, fg_color=Theme.ACCENT_BLUE,
+                      text_color=Theme.TEXT_MAIN, hover_color=Theme.ACCENT_BLUE_HOVER).pack(fill="x", padx=0, pady=10)
 
         batch_tab = self.input_tabs.tab("Batch Queue")
         list_container = ctk.CTkFrame(batch_tab, fg_color=Theme.BG_TERTIARY, height=150)
@@ -640,12 +708,16 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
              except Exception: pass
         batch_ctrl_frame = ctk.CTkFrame(batch_tab, fg_color="transparent")
         batch_ctrl_frame.pack(fill="x", pady=5)
-        ctk.CTkButton(batch_ctrl_frame, text="Clear", command=self.clear_batch_list, width=60, fg_color=Theme.BUTTON_SUBTLE, hover_color=Theme.BUTTON_SUBTLE_HOVER).pack(side="left", padx=(0,5))
-        ctk.CTkButton(batch_ctrl_frame, text="Remove Selected", command=self.remove_batch_item, width=120, fg_color=Theme.BUTTON_SUBTLE, hover_color=Theme.BUTTON_SUBTLE_HOVER).pack(side="left")
+        ctk.CTkButton(batch_ctrl_frame, text="Clear", command=self.clear_batch_list, width=60,
+                      fg_color=Theme.DANGER_RED, hover_color=Theme.DANGER_RED_HOVER).pack(side="left", padx=(0,5))
+        ctk.CTkButton(batch_ctrl_frame, text="Remove Selected", command=self.remove_batch_item, width=120,
+                      fg_color="transparent", border_width=1, border_color=Theme.DANGER_RED,
+                      text_color=Theme.DANGER_RED_HOVER, hover_color=Theme.BUTTON_SUBTLE_HOVER).pack(side="left")
         
         # --- NEW: Recursive Checkbox ---
         ctk.CTkCheckBox(parent, text="Recursive Folder Scan", variable=self.recursive_scan_var, 
-                        text_color=Theme.TEXT_MUTED).pack(fill="x", padx=15, pady=(0, 10))
+                        text_color=Theme.TEXT_MUTED, fg_color=Theme.ACCENT_GREEN,
+                        hover_color=Theme.ACCENT_GREEN_HOVER).pack(fill="x", padx=15, pady=(0, 10))
 
         self._create_cyber_slider_section(parent)
         
@@ -667,23 +739,23 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.slider_frame.pack(fill="x", padx=10, pady=10)
         
         ctk.CTkLabel(self.slider_frame, text="COLUMNS", font=Theme.FONT_BOLD, text_color=Theme.TEXT_MAIN).pack(anchor="w")
-        self.col_slider = ctk.CTkSlider(self.slider_frame, from_=1, to=20, number_of_steps=19, variable=None, 
-                                       command=self._on_col_slider_change, progress_color=Theme.ACCENT_CYAN, 
-                                       button_color=Theme.ACCENT_GLOW, button_hover_color="white")
+        self.col_slider = ctk.CTkSlider(self.slider_frame, from_=1, to=20, number_of_steps=19, variable=None,
+                                       command=self._on_col_slider_change, progress_color=Theme.ACCENT_BLUE,
+                                       button_color=Theme.ACCENT_BLUE, button_hover_color=Theme.ACCENT_BLUE_HOVER)
         self.col_slider.set(5)
         self.col_slider.pack(fill="x", pady=(0, 15))
         
         ctk.CTkLabel(self.slider_frame, text="ROWS", font=Theme.FONT_BOLD, text_color=Theme.TEXT_MAIN).pack(anchor="w")
-        self.row_slider = ctk.CTkSlider(self.slider_frame, from_=1, to=20, number_of_steps=19, variable=None, 
-                                       command=self._on_row_slider_change, progress_color=Theme.ACCENT_CYAN, 
-                                       button_color=Theme.ACCENT_GLOW, button_hover_color="white")
+        self.row_slider = ctk.CTkSlider(self.slider_frame, from_=1, to=20, number_of_steps=19, variable=None,
+                                       command=self._on_row_slider_change, progress_color=Theme.ACCENT_GREEN,
+                                       button_color=Theme.ACCENT_GREEN, button_hover_color=Theme.ACCENT_GREEN_HOVER)
         self.row_slider.set(5)
         self.row_slider.pack(fill="x", pady=(0, 15))
 
     def _populate_dimensions_settings(self, parent):
         # Fit Toggle
         self.fit_switch = ctk.CTkSwitch(parent, text="Force Fit to Resolution", variable=self.fit_to_output_params_var, 
-                                        progress_color=Theme.ACCENT_CYAN, command=self.quick_refresh_layout)
+                                        progress_color=Theme.ACCENT_GREEN, command=self.quick_refresh_layout)
         self.fit_switch.pack(anchor="w", pady=(5, 10))
 
         # Resolution Inputs
@@ -703,15 +775,26 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         ctk.CTkLabel(parent, text="Thumbnails will crop to fit exactly.", font=("Roboto", 10), text_color=Theme.TEXT_MUTED).pack(anchor="w", pady=(5,0))
 
     def _populate_advanced_settings(self, parent):
+        ctk.CTkLabel(parent, text="UI Theme:").pack(anchor="w", pady=(5, 0))
+        self.ui_theme_seg = ctk.CTkSegmentedButton(
+            parent,
+            values=Theme.PRESET_NAMES,
+            variable=self.ui_theme_var,
+            selected_color=Theme.ACCENT_BLUE,
+            selected_hover_color=Theme.ACCENT_BLUE_HOVER,
+            command=self._on_ui_theme_change,
+        )
+        self.ui_theme_seg.pack(fill="x", pady=(0, 10))
+
         ctk.CTkLabel(parent, text="Extraction Mode:").pack(anchor="w", pady=(5, 0))
-        self.extraction_mode_seg = ctk.CTkSegmentedButton(parent, values=["interval", "shot"], variable=self.extraction_mode_var, 
-                                                          selected_color=Theme.ACCENT_CYAN, selected_hover_color=Theme.BUTTON_HOVER, 
+        self.extraction_mode_seg = ctk.CTkSegmentedButton(parent, values=["interval", "shot"], variable=self.extraction_mode_var,
+                                                          selected_color=Theme.ACCENT_GREEN, selected_hover_color=Theme.ACCENT_GREEN_HOVER,
                                                           command=self._on_extraction_mode_change)
         self.extraction_mode_seg.pack(fill="x", pady=(0, 5))
         
         ctk.CTkLabel(parent, text="Layout Mode:").pack(anchor="w", pady=(5, 0))
-        self.layout_mode_seg = ctk.CTkSegmentedButton(parent, values=["grid", "timeline"], variable=self.layout_mode_var, 
-                                                      selected_color=Theme.ACCENT_CYAN, selected_hover_color=Theme.BUTTON_HOVER, 
+        self.layout_mode_seg = ctk.CTkSegmentedButton(parent, values=["grid", "timeline"], variable=self.layout_mode_var,
+                                                      selected_color=Theme.ACCENT_BLUE, selected_hover_color=Theme.ACCENT_BLUE_HOVER,
                                                       command=self._on_layout_mode_change)
         self.layout_mode_seg.pack(fill="x", pady=(0, 5))
         
@@ -731,8 +814,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             values=["Add Suffix", "Fixed Name"], 
             variable=self.output_naming_mode_var,
             command=self._toggle_naming_inputs,
-            selected_color=Theme.ACCENT_CYAN, 
-            selected_hover_color=Theme.BUTTON_HOVER
+            selected_color=Theme.ACTION_GOLD,
+            selected_hover_color=Theme.ACTION_GOLD_HOVER
         )
         self.naming_mode_seg.pack(fill="x", pady=(0, 5))
         
@@ -751,8 +834,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             parent,
             text="Export individual frames only",
             variable=self.output_frames_only_var,
-            fg_color=Theme.ACCENT_CYAN,
-            hover_color=Theme.BUTTON_HOVER,
+            fg_color=Theme.ACTION_GOLD,
+            hover_color=Theme.ACTION_GOLD_HOVER,
             command=self._toggle_frame_export_options,
         )
         self.output_frames_only_cb.pack(anchor="w", pady=(4, 2))
@@ -776,24 +859,24 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         # --- NEW: Overwrite Switch ---
         ctk.CTkLabel(parent, text="Existing Files:").pack(anchor="w", pady=(5,0))
         self.overwrite_seg = ctk.CTkSegmentedButton(parent, values=["overwrite", "skip"], variable=self.overwrite_mode_var,
-                                                   selected_color=Theme.ACCENT_CYAN, selected_hover_color=Theme.BUTTON_HOVER)
+                                                   selected_color=Theme.ACTION_GOLD, selected_hover_color=Theme.ACTION_GOLD_HOVER)
         self.overwrite_seg.pack(fill="x", pady=5)
 
 
-        ctk.CTkSwitch(parent, text="Show Frame Info/Timecode", variable=self.frame_info_show_var, progress_color=Theme.ACCENT_CYAN, command=self.quick_refresh_layout).pack(anchor="w", pady=5)
-        ctk.CTkCheckBox(parent, text="Detect Faces", variable=self.detect_faces_var, fg_color=Theme.ACCENT_CYAN, hover_color=Theme.BUTTON_HOVER).pack(anchor="w", pady=2)
-        ctk.CTkCheckBox(parent, text="Use GPU (FFmpeg)", variable=self.use_gpu_var, fg_color=Theme.ACCENT_CYAN, hover_color=Theme.BUTTON_HOVER).pack(anchor="w", pady=2)
-        ctk.CTkCheckBox(parent, text="Show Header (Filename)", variable=self.show_header_var, fg_color=Theme.ACCENT_CYAN, hover_color=Theme.BUTTON_HOVER, command=self.quick_refresh_layout).pack(anchor="w", pady=2)
-        ctk.CTkCheckBox(parent, text="Show Timecode", variable=self.show_timecode_var, fg_color=Theme.ACCENT_CYAN, hover_color=Theme.BUTTON_HOVER, command=self.quick_refresh_layout).pack(anchor="w", pady=2)
+        ctk.CTkSwitch(parent, text="Show Frame Info/Timecode", variable=self.frame_info_show_var, progress_color=Theme.ACCENT_GREEN, command=self.quick_refresh_layout).pack(anchor="w", pady=5)
+        ctk.CTkCheckBox(parent, text="Detect Faces", variable=self.detect_faces_var, fg_color=Theme.ACCENT_GREEN, hover_color=Theme.ACCENT_GREEN_HOVER).pack(anchor="w", pady=2)
+        ctk.CTkCheckBox(parent, text="Use GPU (FFmpeg)", variable=self.use_gpu_var, fg_color=Theme.ACCENT_GREEN, hover_color=Theme.ACCENT_GREEN_HOVER).pack(anchor="w", pady=2)
+        ctk.CTkCheckBox(parent, text="Show Header (Filename)", variable=self.show_header_var, fg_color=Theme.ACCENT_GREEN, hover_color=Theme.ACCENT_GREEN_HOVER, command=self.quick_refresh_layout).pack(anchor="w", pady=2)
+        ctk.CTkCheckBox(parent, text="Show Timecode", variable=self.show_timecode_var, fg_color=Theme.ACCENT_GREEN, hover_color=Theme.ACCENT_GREEN_HOVER, command=self.quick_refresh_layout).pack(anchor="w", pady=2)
         
         ctk.CTkLabel(parent, text="Rotate Thumbnails:").pack(anchor="w", pady=(10, 0))
-        self.rotate_seg = ctk.CTkSegmentedButton(parent, values=["0", "90", "180", "270"], variable=self.rotate_thumbnails_var, 
-                                                 selected_color=Theme.ACCENT_CYAN, selected_hover_color=Theme.BUTTON_HOVER, 
+        self.rotate_seg = ctk.CTkSegmentedButton(parent, values=["0", "90", "180", "270"], variable=self.rotate_thumbnails_var,
+                                                 selected_color=Theme.ACCENT_BLUE, selected_hover_color=Theme.ACCENT_BLUE_HOVER,
                                                  command=self.quick_refresh_layout)
         self.rotate_seg.pack(fill="x", pady=5)
         
         ctk.CTkLabel(parent, text="Corner Roundness:").pack(anchor="w", pady=(10,0))
-        ctk.CTkSlider(parent, from_=0, to=100, variable=self.rounded_corners_var, progress_color=Theme.ACCENT_CYAN, command=self.quick_refresh_layout).pack(fill="x", pady=5)
+        ctk.CTkSlider(parent, from_=0, to=100, variable=self.rounded_corners_var, progress_color=Theme.ACCENT_GREEN, command=self.quick_refresh_layout).pack(fill="x", pady=5)
         
         ctk.CTkLabel(parent, text="Padding:").pack(anchor="w", pady=(10, 0))
         pad_entry = ctk.CTkEntry(parent, textvariable=self.padding_var)
@@ -807,25 +890,25 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         ctk.CTkLabel(parent, text="Output Format:").pack(anchor="w", pady=(10, 0))
         self.format_seg = ctk.CTkSegmentedButton(parent, values=["jpg", "png"], variable=self.frame_format_var, 
-                                                 selected_color=Theme.ACCENT_CYAN, selected_hover_color=Theme.BUTTON_HOVER)
+                                                 selected_color=Theme.ACCENT_GREEN, selected_hover_color=Theme.ACCENT_GREEN_HOVER)
         self.format_seg.pack(fill="x", pady=5)
         
         ctk.CTkLabel(parent, text="Preview Quality (Fast):").pack(anchor="w", pady=(10,0))
-        ctk.CTkSlider(parent, from_=10, to=100, variable=self.preview_quality_var).pack(fill="x")
+        ctk.CTkSlider(parent, from_=10, to=100, variable=self.preview_quality_var, progress_color=Theme.ACCENT_BLUE).pack(fill="x")
         ctk.CTkLabel(parent, text="Output Quality (JPG):").pack(anchor="w", pady=(10,0))
-        ctk.CTkSlider(parent, from_=10, to=100, variable=self.output_quality_var, progress_color=Theme.ACCENT_CYAN).pack(fill="x")
+        ctk.CTkSlider(parent, from_=10, to=100, variable=self.output_quality_var, progress_color=Theme.ACTION_GOLD).pack(fill="x")
         
         self.update_visibility_state()
 
     def _populate_hdr_settings(self, parent):
         ctk.CTkLabel(parent, text="HDR to SDR Tone Mapping", font=Theme.FONT_BOLD).pack(anchor="w", pady=(5,0))
         ctk.CTkLabel(parent, text="Converts washed-out HDR colors to normal SDR.", font=("Roboto", 10), text_color=Theme.TEXT_MUTED).pack(anchor="w", pady=(0,5))
-        self.hdr_switch = ctk.CTkSwitch(parent, text="Enable Tone Mapping", variable=self.hdr_tonemap_var, progress_color=Theme.ACCENT_CYAN, command=self._toggle_hdr_options)
+        self.hdr_switch = ctk.CTkSwitch(parent, text="Enable Tone Mapping", variable=self.hdr_tonemap_var, progress_color=Theme.ACTION_GOLD, command=self._toggle_hdr_options)
         self.hdr_switch.pack(anchor="w", pady=5)
         self.hdr_algo_frame = ctk.CTkFrame(parent, fg_color="transparent")
         self.hdr_algo_frame.pack(fill="x", padx=20)
         ctk.CTkLabel(self.hdr_algo_frame, text="Algorithm:").pack(side="left")
-        self.hdr_algo_combo = ctk.CTkComboBox(self.hdr_algo_frame, values=["hable", "reinhard", "mobius"], variable=self.hdr_algorithm_var, border_color=Theme.ACCENT_CYAN, button_color=Theme.ACCENT_CYAN)
+        self.hdr_algo_combo = ctk.CTkComboBox(self.hdr_algo_frame, values=["hable", "reinhard", "mobius"], variable=self.hdr_algorithm_var, border_color=Theme.ACTION_GOLD, button_color=Theme.ACTION_GOLD)
         self.hdr_algo_combo.pack(side="left", padx=10)
         self._toggle_hdr_options()
 
@@ -866,14 +949,23 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self.output_naming_mode_var.set("suffix")
 
     # --- LOGIC ---
+    def _set_busy(self, busy: bool):
+        self.is_busy = busy
+        save_state = "disabled" if busy else "normal"
+        self.save_btn.configure(state=save_state)
+        self._on_tab_change()
+
     def _on_tab_change(self):
         active = self.input_tabs.get()
-        if active == "Batch Queue":
-            self.preview_btn.configure(state="disabled", text_color="gray")
-            self.input_entry.configure(state="disabled", fg_color="gray")
+        if self.is_busy or active == "Batch Queue":
+            self.preview_btn.configure(state="disabled", text_color=Theme.TEXT_MUTED, border_color=Theme.BG_TERTIARY)
         else:
-            self.preview_btn.configure(state="normal", text_color=Theme.ACCENT_CYAN)
-            self.input_entry.configure(state="normal", fg_color="#343638")
+            self.preview_btn.configure(state="normal", text_color=Theme.ACCENT_BLUE, border_color=Theme.ACCENT_BLUE)
+
+        if self.is_busy or active == "Batch Queue":
+            self.input_entry.configure(state="disabled", fg_color=Theme.BG_TERTIARY)
+        else:
+            self.input_entry.configure(state="normal", fg_color=Theme.PANEL_SOFT)
 
     def _bind_settings_to_state(self):
         for var_name, setting_key in self.settings_map.items():
@@ -887,6 +979,32 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             val = var.get()
             self.state_manager.update_settings({setting_key: val}, commit=False)
         except Exception: pass
+
+    def _on_ui_theme_change(self, value):
+        if self._loading_persistent_settings or self._applying_theme:
+            return
+        self.state_manager.update_settings({"ui_theme": value}, commit=False)
+        self._apply_ui_theme(value)
+
+    def _apply_ui_theme(self, value):
+        if value == Theme.CURRENT:
+            return
+        self._applying_theme = True
+        try:
+            Theme.apply_preset(value)
+            self.configure(fg_color=Theme.BG_PRIMARY)
+            for child in self.winfo_children():
+                child.destroy()
+            self.grid_columnconfigure(1, weight=1)
+            self.grid_rowconfigure(0, weight=1)
+            self._build_sidebar()
+            self._build_main_area()
+            self._build_toolbar()
+            self._build_action_footer()
+            self.refresh_ui_from_state(self.state_manager.get_state())
+            self._on_tab_change()
+        finally:
+            self._applying_theme = False
 
     def _update_live_math(self, *args):
         try:
@@ -917,6 +1035,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self.row_slider.set(settings.num_rows)
             if hasattr(self, 'layout_mode_seg'): self.layout_mode_seg.set(self.layout_mode_var.get())
             if hasattr(self, 'extraction_mode_seg'): self.extraction_mode_seg.set(self.extraction_mode_var.get())
+            if hasattr(self, 'ui_theme_seg'): self.ui_theme_seg.set(self.ui_theme_var.get())
             if hasattr(self, 'rotate_seg'): self.rotate_seg.set(str(self.rotate_thumbnails_var.get()))
             if hasattr(self, 'format_seg'): self.format_seg.set(self.frame_format_var.get())
             if hasattr(self, 'overwrite_seg'): self.overwrite_seg.set(self.overwrite_mode_var.get())
@@ -929,11 +1048,11 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._update_live_math()
 
     def _restore_grid_visuals(self, state, settings):
-        image_paths = [item.get('frame_path') for item in state.thumbnail_metadata]
+        image_source_data = self._preview_image_source_data(state.thumbnail_metadata, settings.layout_mode)
         grid_path = os.path.join(self.preview_temp_dir, "preview_restored.jpg")
         
         grid_params = {
-            'image_source_data': image_paths,
+            'image_source_data': image_source_data,
             'output_path': grid_path,
             'columns': settings.num_columns,
             'rows': settings.num_rows,
@@ -953,20 +1072,25 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             'output_height': settings.output_height,
         }
 
-        if settings.layout_mode == "timeline":
-             enriched_data = []
-             for item in state.thumbnail_metadata:
-                 enriched_data.append({
-                     'image_path': item['frame_path'],
-                     'width_ratio': item.get('duration_frames', 1.0)
-                 })
-             grid_params['image_source_data'] = enriched_data
-
         success, layout = DependencyManager.image_grid.create_image_grid(**grid_params)
         
         self.state_manager.get_state().thumbnail_layout_data = layout
         if success:
             self.preview_zoomable_canvas.set_image(grid_path)
+
+    def _preview_image_source_data(self, metadata, layout_mode):
+        image_source_data = []
+        for item in metadata or []:
+            entry = {
+                'image_path': item.get('frame_path'),
+                'timestamp_sec': item.get('timestamp_sec'),
+                'frame_number': item.get('frame_number'),
+                'video_filename': item.get('video_filename'),
+            }
+            if layout_mode == 'timeline':
+                entry['width_ratio'] = item.get('duration_frames', 1.0)
+            image_source_data.append(entry)
+        return image_source_data
 
     # --- ACTION HANDLERS ---
     def _start_queue_poller(self):
@@ -988,11 +1112,16 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     self._handle_preview_done(data)
                 elif msg_type == "update_thumbnail":
                     self.update_thumbnail_in_preview(data['index'], data['image'], data['timestamp'])
+                elif msg_type == "busy":
+                    self._set_busy(bool(data))
                 self.update_idletasks()
         except queue.Empty: pass
         self.after(100, self._start_queue_poller)
 
     def start_thumbnail_preview_generation(self):
+        if self.is_busy:
+            return
+
         if self.input_tabs.get() == "Batch Queue":
             messagebox.showinfo("Mode Info", "Switch to 'Single Source' tab to preview tweaks.")
             return
@@ -1044,6 +1173,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.status_lbl.configure(text="Generating Preview...")
         self.progress_bar.configure(mode="indeterminate")
         self.progress_bar.start()
+        self._set_busy(True)
         
         threading.Thread(
             target=self._thumbnail_preview_thread, 
@@ -1106,10 +1236,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 self.queue.put(("log", f"Generating {config['layout_mode']} layout..."))
                 grid_path = os.path.join(temp_dir, "preview_initial.jpg")
                 
-                if config['layout_mode'] == 'timeline':
-                    image_source_data = [{'image_path': m['frame_path'], 'width_ratio': m.get('duration_frames', 1.0)} for m in meta]
-                else:
-                    image_source_data = [m['frame_path'] for m in meta]
+                image_source_data = self._preview_image_source_data(meta, config['layout_mode'])
 
                 grid_success, layout = DependencyManager.image_grid.create_image_grid(
                     image_source_data=image_source_data,
@@ -1141,6 +1268,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             traceback.print_exc()
         finally:
             self.queue.put(("progress", (0, 0, "")))
+            self.queue.put(("busy", False))
 
     def _process_preview_thumbnails(self, meta_list, config, logger):
         cv2 = DependencyManager.video_processing.cv2
@@ -1193,10 +1321,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             return
         meta = self.state_manager.get_state().thumbnail_metadata
         layout_mode = self.layout_mode_var.get()
-        if layout_mode == 'timeline':
-             image_source_data = [{'image_path': m['frame_path'], 'width_ratio': m.get('duration_frames', 1.0)} for m in meta]
-        else:
-             image_source_data = [m['frame_path'] for m in meta]
+        image_source_data = self._preview_image_source_data(meta, layout_mode)
         grid_path = os.path.join(self.preview_temp_dir, "preview_refresh.jpg")
         success, layout = DependencyManager.image_grid.create_image_grid(
             image_source_data=image_source_data,
@@ -1272,12 +1397,18 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     # --- FINAL GENERATION ---
     def generate_movieprint_action(self):
+        if self.is_busy:
+            return
+
         self.status_lbl.configure(text="Starting Generation...")
         active_tab = self.input_tabs.get()
         final_input_list = []
         if active_tab == "Batch Queue":
             if not self.batch_file_list:
                 messagebox.showerror("Input Error", "Batch queue is empty.")
+                return
+            if self.output_naming_mode_var.get() in ("custom", "Fixed Name"):
+                messagebox.showerror("Naming Error", "Fixed Name is only safe for a single source. Use Add Suffix for batch exports.")
                 return
             final_input_list = self.batch_file_list
         else:
@@ -1375,6 +1506,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         
         self.status_lbl.configure(text="Generating...")
         self.progress_bar.configure(mode="determinate")
+        self._set_busy(True)
         
         threading.Thread(
             target=self.run_generation_in_thread, 
@@ -1393,6 +1525,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         finally:
             self.queue.put(("log", "Done."))
             self.queue.put(("progress", (100, 100, "Done")))
+            self.queue.put(("busy", False))
 
     def _gui_progress_callback(self, current, total, filename):
         self.queue.put(("progress", (current, total, filename)))
@@ -1474,17 +1607,23 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def _load_persistent_settings(self):
         if not os.path.exists(SETTINGS_FILE): return
         try:
+            self._loading_persistent_settings = True
             with open(SETTINGS_FILE, 'r') as f:
                 settings = json.load(f)
                 self.input_paths_var.set(settings.get("input_paths", ""))
                 if self.input_paths_var.get():
                      self._internal_input_paths = [p.strip() for p in self.input_paths_var.get().split(';') if p.strip()]
                 for var_name, key in self.settings_map.items():
-                    if key in settings and hasattr(self, var_name): getattr(self, var_name).set(settings[key])
+                    if key in settings and hasattr(self, var_name):
+                        value = settings[key]
+                        if key == "ui_theme" and value not in Theme.PRESET_NAMES:
+                            value = "Teal"
+                        getattr(self, var_name).set(value)
                 self.col_slider.set(int(self.num_columns_var.get() or 5))
                 self.row_slider.set(int(self.num_rows_var.get() or 5))
                 if hasattr(self, 'layout_mode_seg'): self.layout_mode_seg.set(self.layout_mode_var.get())
                 if hasattr(self, 'extraction_mode_seg'): self.extraction_mode_seg.set(self.extraction_mode_var.get())
+                if hasattr(self, 'ui_theme_seg'): self.ui_theme_seg.set(self.ui_theme_var.get())
                 if hasattr(self, 'rotate_seg'): self.rotate_seg.set(str(self.rotate_thumbnails_var.get()))
                 if hasattr(self, 'format_seg'): self.format_seg.set(self.frame_format_var.get())
                 if hasattr(self, 'overwrite_seg'): self.overwrite_seg.set(self.overwrite_mode_var.get())
@@ -1492,6 +1631,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 self._toggle_naming_inputs()
                 self._toggle_hdr_options()
         except Exception: pass
+        finally:
+            self._loading_persistent_settings = False
 
     def _on_closing(self):
         settings = {}
