@@ -1396,6 +1396,29 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         except Exception as e: print(f"Error updating thumbnail: {e}")
 
     # --- FINAL GENERATION ---
+    def _find_batch_output_collisions(self, settings):
+        logger = logging.getLogger("batch_output_collision_check")
+        video_files = DependencyManager.movieprint_maker.discover_video_files(
+            settings.input_paths,
+            getattr(settings, 'video_extensions', ".mp4,.avi,.mov,.mkv,.flv,.wmv"),
+            getattr(settings, 'recursive_scan', False),
+            logger
+        )
+        return DependencyManager.movieprint_maker.find_output_path_collisions(video_files, settings)
+
+    def _show_batch_output_collision_error(self, collisions):
+        first = collisions[0]
+        videos = "\n".join(f"- {os.path.basename(path)}" for path in first['videos'][:4])
+        if len(first['videos']) > 4:
+            videos += f"\n- plus {len(first['videos']) - 4} more"
+        messagebox.showerror(
+            "Naming Error",
+            "These batch items would write to the same output:\n\n"
+            f"{first['output']}\n\n"
+            f"{videos}\n\n"
+            "Use Add Suffix, change Fixed Name, or split that folder into a separate batch."
+        )
+
     def generate_movieprint_action(self):
         if self.is_busy:
             return
@@ -1406,9 +1429,6 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         if active_tab == "Batch Queue":
             if not self.batch_file_list:
                 messagebox.showerror("Input Error", "Batch queue is empty.")
-                return
-            if self.output_naming_mode_var.get() in ("custom", "Fixed Name"):
-                messagebox.showerror("Naming Error", "Fixed Name is only safe for a single source. Use Add Suffix for batch exports.")
                 return
             final_input_list = self.batch_file_list
         else:
@@ -1503,6 +1523,12 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         except Exception as e:
              messagebox.showerror("Error", str(e))
              return
+
+        if active_tab == "Batch Queue":
+            collisions = self._find_batch_output_collisions(settings)
+            if collisions:
+                self._show_batch_output_collision_error(collisions)
+                return
         
         self.status_lbl.configure(text="Generating...")
         self.progress_bar.configure(mode="determinate")

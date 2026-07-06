@@ -82,8 +82,58 @@ def discover_video_files(input_sources, valid_extensions_str, recursive_scan, lo
                     _, file_ext = os.path.splitext(item_path)
                     if file_ext.lower() in valid_extensions: 
                         video_files_found.add(item_path)
-    
+
     return sorted(list(video_files_found))
+
+def get_effective_output_filename(video_path, settings):
+    """Builds the output filename that will be used for a discovered video."""
+    output_print_format = getattr(settings, 'frame_format', 'jpg').lower()
+    if output_print_format not in ['jpg', 'png']:
+        output_print_format = 'jpg'
+
+    if getattr(settings, 'output_naming_mode', 'suffix') == 'custom':
+        custom_name = getattr(settings, 'output_filename', '').strip()
+        if custom_name:
+            base_name, ext = os.path.splitext(custom_name)
+            if ext.lower() in ['.png', '.jpg', '.jpeg']:
+                output_print_format = ext.lower().replace('.', '').replace('jpeg', 'jpg')
+                custom_name = base_name
+            return f"{custom_name}.{output_print_format}"
+
+    base = os.path.splitext(os.path.basename(video_path))[0]
+    suffix = getattr(settings, 'output_filename_suffix', '_movieprint')
+    return f"{base}{suffix}.{output_print_format}"
+
+def get_target_output_path(video_path, settings, effective_output_filename=None):
+    """Returns the final file or folder path for a video's generated output."""
+    configured_output_dir = getattr(settings, 'output_dir', None)
+    if configured_output_dir:
+        target_dir = os.path.abspath(configured_output_dir)
+    else:
+        target_dir = os.path.dirname(os.path.abspath(video_path))
+
+    if effective_output_filename is None:
+        effective_output_filename = get_effective_output_filename(video_path, settings)
+
+    if getattr(settings, 'output_frames_only', False):
+        final_path = os.path.join(target_dir, os.path.splitext(effective_output_filename)[0] + "_frames")
+        if getattr(settings, 'individual_frames_output_dir', '').strip():
+            base_dir = os.path.abspath(getattr(settings, 'individual_frames_output_dir').strip())
+            final_path = os.path.join(base_dir, os.path.basename(final_path))
+        return final_path
+
+    return os.path.join(target_dir, effective_output_filename)
+
+def find_output_path_collisions(video_files, settings):
+    """Finds batch entries that would write to the same output path."""
+    outputs_by_key = {}
+    for video_path in video_files:
+        output_path = get_target_output_path(video_path, settings)
+        key = os.path.normcase(os.path.abspath(output_path))
+        outputs_by_key.setdefault(key, {'output': output_path, 'videos': []})
+        outputs_by_key[key]['videos'].append(video_path)
+
+    return [group for group in outputs_by_key.values() if len(group['videos']) > 1]
 
 def enforce_max_filesize(image_path, target_kb, logger):
     """Iteratively reduces image quality/size to meet a target file size (KB)."""
@@ -546,20 +596,6 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
     failed_ops = []
     total_videos = len(video_files_to_process)
 
-    # Determine Format (Default jpg)
-    output_print_format = "jpg"
-    if hasattr(settings, 'frame_format') and settings.frame_format.lower() in ['jpg', 'png']:
-        output_print_format = settings.frame_format.lower()
-
-    # Handle custom filename extension override
-    if getattr(settings, 'output_naming_mode', 'suffix') == 'custom':
-        custom_name = getattr(settings, 'output_filename', '').strip()
-        if custom_name:
-            _, ext = os.path.splitext(custom_name)
-            if ext.lower() in ['.png', '.jpg', '.jpeg']:
-                output_print_format = ext.lower().replace('.', '').replace('jpeg','jpg')
-                settings.output_filename = os.path.splitext(custom_name)[0]
-
     # Mode for overwriting
     overwrite_mode = getattr(settings, 'overwrite_mode', 'overwrite')
 
@@ -567,19 +603,10 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
         if progress_callback: progress_callback(i, total_videos, video_path)
 
         # Naming Logic (Calculated early for skip check)
-        naming_mode = getattr(settings, 'output_naming_mode', 'suffix')
-        if naming_mode == 'custom' and getattr(settings, 'output_filename', ''):
-            base_name = settings.output_filename
-            effective_output_name = f"{base_name}.{output_print_format}"
-        else:
-            base = os.path.splitext(os.path.basename(video_path))[0]
-            suffix = getattr(settings, 'output_filename_suffix', '_movieprint')
-            effective_output_name = f"{base}{suffix}.{output_print_format}"
+        effective_output_name = get_effective_output_filename(video_path, settings)
 
         # 2. Skip Check
-        configured_output_dir = getattr(settings, 'output_dir', None)
-        target_dir = os.path.abspath(configured_output_dir) if configured_output_dir else os.path.dirname(os.path.abspath(video_path))
-        full_output_path = os.path.join(target_dir, effective_output_name)
+        full_output_path = get_target_output_path(video_path, settings, effective_output_name)
 
         if not getattr(settings, 'output_frames_only', False):
             if overwrite_mode == 'skip' and os.path.exists(full_output_path):
