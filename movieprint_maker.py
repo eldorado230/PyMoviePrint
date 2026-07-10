@@ -6,6 +6,7 @@ import tempfile
 import glob
 import json
 import re
+import ntpath
 try:
     import cv2
     CV2_IMPORT_ERROR = None
@@ -94,6 +95,17 @@ def get_effective_output_filename(video_path, settings):
     if getattr(settings, 'output_naming_mode', 'suffix') == 'custom':
         custom_name = getattr(settings, 'output_filename', '').strip()
         if custom_name:
+            if (
+                os.path.isabs(custom_name)
+                or ntpath.isabs(custom_name)
+                or ntpath.splitdrive(custom_name)[0]
+                or '/' in custom_name
+                or '\\' in custom_name
+                or os.path.basename(custom_name) != custom_name
+            ):
+                raise ValueError(
+                    "Custom output name must be a plain filename without folder or drive components."
+                )
             base_name, ext = os.path.splitext(custom_name)
             if ext.lower() in ['.png', '.jpg', '.jpeg']:
                 output_print_format = ext.lower().replace('.', '').replace('jpeg', 'jpg')
