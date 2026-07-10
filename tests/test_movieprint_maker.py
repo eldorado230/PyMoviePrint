@@ -53,6 +53,65 @@ class MoviePrintMakerTests(unittest.TestCase):
             self.assertEqual(non_recursive, [top_video])
             self.assertEqual(recursive, sorted([top_video, nested_video]))
 
+    def test_fixed_name_batch_allows_unique_source_folders(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first_dir = os.path.join(tmp, "Movie One")
+            second_dir = os.path.join(tmp, "Movie Two")
+            os.makedirs(first_dir, exist_ok=True)
+            os.makedirs(second_dir, exist_ok=True)
+            first_video = os.path.join(first_dir, "movie.mkv")
+            second_video = os.path.join(second_dir, "movie.mkv")
+
+            for path in (first_video, second_video):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("video")
+
+            settings = SimpleNamespace(
+                frame_format="jpg",
+                output_naming_mode="custom",
+                output_filename="movieprint",
+                output_dir=None,
+                output_frames_only=False,
+                individual_frames_output_dir="",
+            )
+
+            videos = movieprint_maker.discover_video_files(
+                [tmp], ".mp4,.mkv", recursive_scan=True, logger=self.logger
+            )
+            collisions = movieprint_maker.find_output_path_collisions(videos, settings)
+            outputs = [movieprint_maker.get_target_output_path(video, settings) for video in videos]
+
+            self.assertEqual(collisions, [])
+            self.assertEqual({os.path.basename(output) for output in outputs}, {"movieprint.jpg"})
+            self.assertEqual(len({os.path.dirname(output) for output in outputs}), 2)
+
+    def test_fixed_name_batch_detects_same_folder_collision(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first_video = os.path.join(tmp, "part1.mp4")
+            second_video = os.path.join(tmp, "part2.mkv")
+
+            for path in (first_video, second_video):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("video")
+
+            settings = SimpleNamespace(
+                frame_format="jpg",
+                output_naming_mode="custom",
+                output_filename="movieprint",
+                output_dir=None,
+                output_frames_only=False,
+                individual_frames_output_dir="",
+            )
+
+            videos = movieprint_maker.discover_video_files(
+                [tmp], ".mp4,.mkv", recursive_scan=False, logger=self.logger
+            )
+            collisions = movieprint_maker.find_output_path_collisions(videos, settings)
+
+            self.assertEqual(len(collisions), 1)
+            self.assertEqual(os.path.basename(collisions[0]["output"]), "movieprint.jpg")
+            self.assertEqual(set(collisions[0]["videos"]), {first_video, second_video})
+
     def test_process_single_video_writes_to_configured_output_dir(self):
         with tempfile.TemporaryDirectory() as tmp:
             input_video = os.path.join(tmp, "input.mp4")

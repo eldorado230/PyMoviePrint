@@ -12,6 +12,7 @@ import threading
 import queue
 import time
 import json
+import traceback
 import numpy as np
 from typing import Optional, List, Dict, Any, Tuple, Union
 from PIL import ImageTk, Image, ImageDraw, ImageChops, ImageOps
@@ -19,9 +20,11 @@ from PIL import ImageTk, Image, ImageDraw, ImageChops, ImageOps
 # --- DEPENDENCY MANAGEMENT ---
 class DependencyManager:
     MISSING_LIBS: List[str] = []
+    LOAD_FAILURES: List[Tuple[str, str, str]] = []
     video_processing = None
     state_manager_cls = None
     movieprint_maker = None
+    movieprint_maker_module = None
     image_grid = None
     version = "0.0.0"
     
@@ -39,13 +42,20 @@ class DependencyManager:
             try:
                 mod = __import__(name)
                 setattr(cls, attr, mod)
-            except ImportError as e:
+            except Exception as e:
+                error_detail = f"{type(e).__name__}: {e}"
+                error_traceback = traceback.format_exc()
+                cls.LOAD_FAILURES.append((name, error_detail, error_traceback))
+                logging.getLogger(__name__).error(
+                    "Failed to import local module '%s'", name, exc_info=True
+                )
                 if name != "version":
-                    cls.MISSING_LIBS.append(f"{name}.py ({e})")
+                    cls.MISSING_LIBS.append(f"{name}.py ({error_detail})")
 
         if cls.state_manager:
             cls.state_manager_cls = cls.state_manager.StateManager
         if cls.movieprint_maker:
+            cls.movieprint_maker_module = cls.movieprint_maker
             cls.movieprint_maker = cls.movieprint_maker.execute_movieprint_generation
         if hasattr(cls, 'version') and hasattr(cls.version, '__version__'):
             cls.version = cls.version.__version__
@@ -162,6 +172,14 @@ def setup_file_logging():
     console_handler = logging.StreamHandler(sys.stdout)
     console_handler.setLevel(logging.INFO)
     root_logger.addHandler(console_handler)
+
+    for module_name, error_detail, error_traceback in DependencyManager.LOAD_FAILURES:
+        root_logger.error(
+            "Failed to import local module '%s' (%s):\n%s",
+            module_name,
+            error_detail,
+            error_traceback,
+        )
 
     def handle_exception(exc_type, exc_value, exc_traceback):
         if issubclass(exc_type, KeyboardInterrupt):
@@ -1110,6 +1128,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     else: self.status_lbl.configure(text="Processing Complete.")
                 elif msg_type == "preview_done":
                     self._handle_preview_done(data)
+                elif msg_type == "preview_failed":
+                    self._handle_preview_failed(data)
+                elif msg_type == "generation_done":
+                    self._handle_generation_done(data)
                 elif msg_type == "update_thumbnail":
                     self.update_thumbnail_in_preview(data['index'], data['image'], data['timestamp'])
                 elif msg_type == "busy":
@@ -1135,7 +1157,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             # Use maker's discovery logic to find first valid video
             valid_exts = ".mp4,.avi,.mov,.mkv,.flv,.wmv"
             # We don't recurse for preview scan to save time, just check root
-            videos = DependencyManager.movieprint_maker.discover_video_files([preview_target_path], valid_exts, False, logging.getLogger("preview_scan"))
+            videos = DependencyManager.movieprint_maker_module.discover_video_files([preview_target_path], valid_exts, False, logging.getLogger("preview_scan"))
             if videos:
                 preview_target_path = videos[0]
             else:
@@ -1186,6 +1208,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         logger.addHandler(QueueHandler(self.queue))
         meta = []
         success = False
+        failure_reason = None
         try:
             if not config['hdr_tonemap']:
                  with DependencyManager.video_processing.VideoExtractor(video_path, logger) as ve:
@@ -1261,13 +1284,17 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                         "grid_path": grid_path, "meta": meta,
                         "layout": layout, "temp_dir": temp_dir
                     }))
-            else: self.queue.put(("log", "Failed to extract frames."))
+                else:
+                    failure_reason = "Preview image could not be created."
+            else:
+                failure_reason = "Frame extraction yielded no frames."
         except Exception as e:
-            self.queue.put(("log", f"Error: {e}"))
-            import traceback
-            traceback.print_exc()
+            logger.exception("Preview generation failed")
+            failure_reason = str(e)
         finally:
             self.queue.put(("progress", (0, 0, "")))
+            if failure_reason:
+                self.queue.put(("preview_failed", {"reason": failure_reason}))
             self.queue.put(("busy", False))
 
     def _process_preview_thumbnails(self, meta_list, config, logger):
@@ -1282,7 +1309,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                         if img is not None:
                             img = cv2.rotate(img, rot_flag)
                             cv2.imwrite(item['frame_path'], img)
-                    except: pass
+                    except Exception as e:
+                        logger.warning(f"Preview thumbnail rotation failed for {item.get('frame_path')}: {e}")
         if config['detect_faces']:
             self.queue.put(("log", "Detecting faces (Preview)..."))
             cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
@@ -1315,6 +1343,41 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.progress_bar.stop()
         self._update_live_math()
         self.state_manager.snapshot()
+
+    def _handle_preview_failed(self, data):
+        reason = data.get("reason") or "An unknown error occurred while generating the preview."
+        summary = f"Preview failed: {reason}"
+        self.progress_bar.stop()
+        self.status_lbl.configure(text=summary)
+        messagebox.showerror("Preview Error", summary)
+
+    def _handle_generation_done(self, data):
+        successful_ops = data.get("successful_ops", [])
+        failed_ops = data.get("failed_ops", [])
+        success_count = len(successful_ops)
+        failure_count = len(failed_ops)
+
+        if success_count == 0 and failure_count == 0:
+            summary = "No valid video files were found. Nothing was generated."
+            self.status_lbl.configure(text=summary)
+            messagebox.showwarning("Generation Complete", summary)
+            return
+
+        if failure_count == 0:
+            summary = f"Generation complete: {success_count} movieprint(s) created."
+            self.status_lbl.configure(text=summary)
+            messagebox.showinfo("Generation Complete", summary)
+            return
+
+        summary = f"Generation complete: {success_count} succeeded, {failure_count} failed."
+        if success_count == 0:
+            summary = f"Generation failed: {failure_count} movieprint(s) failed."
+
+        first_failure = failed_ops[0].get("reason") if failed_ops else None
+        if first_failure:
+            summary += f"\n\nFirst error: {first_failure}"
+        self.status_lbl.configure(text=summary.split("\n", 1)[0])
+        messagebox.showwarning("Generation Completed with Errors", summary)
 
     def quick_refresh_layout(self, value=None):
         if not self.state_manager.get_state().thumbnail_metadata or not self.preview_temp_dir:
@@ -1393,9 +1456,35 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 resized.putalpha(final_alpha)
             canvas_handler.original_image.paste(resized, (thumb_info['x'], thumb_info['y']), mask=resized if radius > 0 else None)
             canvas_handler._apply_zoom()
-        except Exception as e: print(f"Error updating thumbnail: {e}")
+        except Exception as e:
+            logging.getLogger("preview").warning(f"Error updating preview thumbnail: {e}")
 
     # --- FINAL GENERATION ---
+    def _find_batch_output_collisions(self, settings):
+        logger = logging.getLogger("batch_output_collision_check")
+        video_files = DependencyManager.movieprint_maker_module.discover_video_files(
+            settings.input_paths,
+            getattr(settings, 'video_extensions', ".mp4,.avi,.mov,.mkv,.flv,.wmv"),
+            getattr(settings, 'recursive_scan', False),
+            logger
+        )
+        if len(video_files) < 2:
+            return []
+        return DependencyManager.movieprint_maker_module.find_output_path_collisions(video_files, settings)
+
+    def _show_batch_output_collision_error(self, collisions):
+        first = collisions[0]
+        videos = "\n".join(f"- {os.path.basename(path)}" for path in first['videos'][:4])
+        if len(first['videos']) > 4:
+            videos += f"\n- plus {len(first['videos']) - 4} more"
+        messagebox.showerror(
+            "Naming Error",
+            "These batch items would write to the same output:\n\n"
+            f"{first['output']}\n\n"
+            f"{videos}\n\n"
+            "Use Add Suffix, change Fixed Name, or split that folder into a separate batch."
+        )
+
     def generate_movieprint_action(self):
         if self.is_busy:
             return
@@ -1407,18 +1496,14 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             if not self.batch_file_list:
                 messagebox.showerror("Input Error", "Batch queue is empty.")
                 return
-            if self.output_naming_mode_var.get() in ("custom", "Fixed Name"):
-                messagebox.showerror("Naming Error", "Fixed Name is only safe for a single source. Use Add Suffix for batch exports.")
-                return
             final_input_list = self.batch_file_list
         else:
             input_paths_str = self.input_paths_var.get()
-            if not self._internal_input_paths:
-                if input_paths_str: self._internal_input_paths = [p.strip() for p in input_paths_str.split(';') if p.strip()]
-                else: 
-                    messagebox.showerror("Input Error", "Please select video file(s).")
-                    return
-            final_input_list = self._internal_input_paths
+            final_input_list = [p.strip() for p in input_paths_str.split(';') if p.strip()]
+            if not final_input_list:
+                messagebox.showerror("Input Error", "Please select video file(s).")
+                return
+            self._internal_input_paths = final_input_list
         
         settings = argparse.Namespace()
         settings.input_paths = final_input_list
@@ -1503,6 +1588,11 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         except Exception as e:
              messagebox.showerror("Error", str(e))
              return
+
+        collisions = self._find_batch_output_collisions(settings)
+        if collisions:
+            self._show_batch_output_collision_error(collisions)
+            return
         
         self.status_lbl.configure(text="Generating...")
         self.progress_bar.configure(mode="determinate")
@@ -1519,12 +1609,18 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         thread_logger.setLevel(logging.INFO)
         thread_logger.addHandler(QueueHandler(self.queue))
         try:
-            DependencyManager.movieprint_maker(settings, thread_logger, progress_cb, fast_preview=False)
+            successful_ops, failed_ops = DependencyManager.movieprint_maker(
+                settings, thread_logger, progress_cb, fast_preview=False
+            )
         except Exception as e:
             thread_logger.exception(f"Error: {e}")
+            successful_ops = []
+            failed_ops = [{"reason": str(e)}]
         finally:
-            self.queue.put(("log", "Done."))
-            self.queue.put(("progress", (100, 100, "Done")))
+            self.queue.put(("generation_done", {
+                "successful_ops": successful_ops,
+                "failed_ops": failed_ops,
+            }))
             self.queue.put(("busy", False))
 
     def _gui_progress_callback(self, current, total, filename):
