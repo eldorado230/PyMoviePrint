@@ -517,6 +517,12 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
     """Main pipeline for processing a single video file."""
     logger.info(f"\nProcessing video: {video_file_path}...")
 
+    if not shutil.which(video_processing.FFMPEG_BIN):
+        return False, (
+            "FFmpeg was not found on PATH. Install FFmpeg, restart PyMoviePrint, "
+            "and confirm that 'ffmpeg -version' works in a terminal."
+        )
+
     # 1. Path Resolution
     configured_output_dir = getattr(settings, 'output_dir', None)
     if configured_output_dir:
@@ -609,14 +615,6 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
     if not video_files_to_process:
         logger.warning("No video files found to process.")
         return [], []
-
-    if not shutil.which(video_processing.FFMPEG_BIN):
-        reason = (
-            "FFmpeg was not found on PATH. Install FFmpeg, restart PyMoviePrint, "
-            "and confirm that 'ffmpeg -version' works in a terminal."
-        )
-        logger.error(reason)
-        return [], [{'video': video_path, 'reason': reason} for video_path in video_files_to_process]
 
     successful_ops = []
     failed_ops = []
