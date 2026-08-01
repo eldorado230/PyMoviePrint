@@ -82,10 +82,10 @@ python movieprint_gui.py
 
 Recommended GUI flow:
 1. Add source file(s).
-2. Click **PREVIEW** for a draft render.
+2. Click **Preview** for a draft render.
 3. Scrub specific thumbnails by click-dragging in preview.
 4. Tune layout/styling/HDR settings.
-5. Click **APPLY / SAVE** for final output.
+5. Click **Generate** for final output.
 
 ### CLI
 

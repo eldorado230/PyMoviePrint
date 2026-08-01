@@ -67,10 +67,10 @@ python movieprint_gui.py
 
 1. Add a single file or queue multiple files/folders.
 2. Set extraction + layout settings.
-3. Click **PREVIEW** to generate a draft.
+3. Click **Preview** to generate a draft.
 4. Scrub thumbnails in preview to refine specific cells.
 5. Apply style overlays, margins, color, HDR settings.
-6. Click **APPLY / SAVE** for full output render.
+6. Click **Generate** for the full output render.
 
 ### 3.2 Scrubbing (high-impact feature)
 
@@ -82,6 +82,8 @@ python movieprint_gui.py
 
 - If drag-and-drop libraries are unavailable, the app still runs with fallback behavior.
 - Logs are written under the user profile (`~/.pymovieprint/logs`) to assist debugging.
+- Cancel stops a batch before the next video begins. The current FFmpeg extraction step is allowed to finish safely first.
+- Fixed Name works for a recursive parent-folder batch when each source video is in a different folder. PyMoviePrint blocks only outputs that resolve to the same final path.
 
 ---
 

@@ -22,10 +22,10 @@ rm -rf build dist
 # Run PyInstaller
 pyinstaller movieprint_gui.spec
 
-if [ -d "dist/MoviePrint.app" ]; then
+if [ -d "dist/PyMoviePrint.app" ]; then
     echo "------------------------------------------------"
     echo "Build successful!"
-    echo "The application is located at: dist/MoviePrint.app"
+    echo "The application is located at: dist/PyMoviePrint.app"
     echo "You can drag this to your Applications folder."
     echo "------------------------------------------------"
 else

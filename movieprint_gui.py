@@ -464,6 +464,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.preview_temp_dir: Optional[str] = None
         self.is_landing_state = True
         self.is_busy = False
+        self.active_cancel_event = None
+        self.active_job_kind = None
         self._applying_theme = False
         self._loading_persistent_settings = False
         
@@ -590,8 +592,16 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                       fg_color="transparent", border_width=1, border_color=Theme.ACCENT_BLUE,
                       text_color=Theme.ACCENT_BLUE, hover_color=Theme.BUTTON_SUBTLE_HOVER)
         self.preview_btn.pack(side="left", padx=5)
+
+        self.cancel_btn = ctk.CTkButton(
+            btn_frame, text="CANCEL", command=self.cancel_active_job, width=86,
+            fg_color="transparent", border_width=1, border_color=Theme.DANGER_RED,
+            text_color=Theme.DANGER_RED_HOVER, hover_color=Theme.BUTTON_SUBTLE_HOVER,
+        )
+        self.cancel_btn.pack(side="left", padx=5)
+        self.cancel_btn.configure(state="disabled")
         
-        self.save_btn = ctk.CTkButton(btn_frame, text="APPLY / SAVE", command=self.generate_movieprint_action,
+        self.save_btn = ctk.CTkButton(btn_frame, text="GENERATE", command=self.generate_movieprint_action,
                                       fg_color=Theme.ACTION_GOLD, text_color=Theme.TEXT_DARK,
                                       hover_color=Theme.ACTION_GOLD_HOVER, font=Theme.FONT_BOLD, width=150)
         self.save_btn.pack(side="left", padx=5)
@@ -726,6 +736,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
              except Exception: pass
         batch_ctrl_frame = ctk.CTkFrame(batch_tab, fg_color="transparent")
         batch_ctrl_frame.pack(fill="x", pady=5)
+        ctk.CTkButton(batch_ctrl_frame, text="Add Files", command=self.browse_batch_files, width=86,
+                      fg_color=Theme.ACCENT_BLUE, hover_color=Theme.ACCENT_BLUE_HOVER).pack(side="left", padx=(0, 5))
+        ctk.CTkButton(batch_ctrl_frame, text="Add Folder", command=self.browse_batch_folder, width=96,
+                      fg_color=Theme.BUTTON_SUBTLE, hover_color=Theme.BUTTON_SUBTLE_HOVER).pack(side="left", padx=(0, 5))
         ctk.CTkButton(batch_ctrl_frame, text="Clear", command=self.clear_batch_list, width=60,
                       fg_color=Theme.DANGER_RED, hover_color=Theme.DANGER_RED_HOVER).pack(side="left", padx=(0,5))
         ctk.CTkButton(batch_ctrl_frame, text="Remove Selected", command=self.remove_batch_item, width=120,
@@ -971,7 +985,19 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.is_busy = busy
         save_state = "disabled" if busy else "normal"
         self.save_btn.configure(state=save_state)
+        self.cancel_btn.configure(state="normal" if busy else "disabled")
+        if not busy:
+            self.active_cancel_event = None
+            self.active_job_kind = None
         self._on_tab_change()
+
+    def cancel_active_job(self):
+        if not self.is_busy or not self.active_cancel_event:
+            return
+        self.active_cancel_event.set()
+        self.cancel_btn.configure(state="disabled")
+        job_name = "preview" if self.active_job_kind == "preview" else "batch"
+        self.status_lbl.configure(text=f"Cancelling {job_name} after the current video step...")
 
     def _on_tab_change(self):
         active = self.input_tabs.get()
@@ -1130,6 +1156,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     self._handle_preview_done(data)
                 elif msg_type == "preview_failed":
                     self._handle_preview_failed(data)
+                elif msg_type == "preview_cancelled":
+                    self._handle_preview_cancelled()
                 elif msg_type == "generation_done":
                     self._handle_generation_done(data)
                 elif msg_type == "update_thumbnail":
@@ -1148,7 +1176,11 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             messagebox.showinfo("Mode Info", "Switch to 'Single Source' tab to preview tweaks.")
             return
 
-        if not self._internal_input_paths: return
+        input_paths = [p.strip() for p in self.input_paths_var.get().split(';') if p.strip()]
+        if not input_paths:
+            messagebox.showerror("Preview Error", "Choose a video file before generating a preview.")
+            return
+        self._internal_input_paths = input_paths
         
         # --- NEW: Check if input is directory and resolve to first video ---
         preview_target_path = self._internal_input_paths[0]
@@ -1189,12 +1221,15 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             'hdr_algorithm': self.hdr_algorithm_var.get(),
             'fit_to_output_params': self.fit_to_output_params_var.get(),
             'output_width': int(self.output_width_var.get()),
-            'output_height': int(self.output_height_var.get())
+            'output_height': int(self.output_height_var.get()),
+            'cancel_event': threading.Event(),
         }
 
         self.status_lbl.configure(text="Generating Preview...")
         self.progress_bar.configure(mode="indeterminate")
         self.progress_bar.start()
+        self.active_cancel_event = preview_settings['cancel_event']
+        self.active_job_kind = "preview"
         self._set_busy(True)
         
         threading.Thread(
@@ -1253,7 +1288,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                         video_path, timestamps, temp_dir, logger, fast_preview=True
                     )
             
-            if success and meta:
+            if config['cancel_event'].is_set():
+                self.queue.put(("preview_cancelled", None))
+            elif success and meta:
                 self._process_preview_thumbnails(meta, config, logger)
 
                 self.queue.put(("log", f"Generating {config['layout_mode']} layout..."))
@@ -1279,7 +1316,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     output_height=config['output_height']
                 )
                 
-                if grid_success:
+                if config['cancel_event'].is_set():
+                    self.queue.put(("preview_cancelled", None))
+                elif grid_success:
                     self.queue.put(("preview_done", {
                         "grid_path": grid_path, "meta": meta,
                         "layout": layout, "temp_dir": temp_dir
@@ -1351,19 +1390,24 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.status_lbl.configure(text=summary)
         messagebox.showerror("Preview Error", summary)
 
+    def _handle_preview_cancelled(self):
+        self.progress_bar.stop()
+        self.status_lbl.configure(text="Preview cancelled. No preview was changed.")
+
     def _handle_generation_done(self, data):
         successful_ops = data.get("successful_ops", [])
         failed_ops = data.get("failed_ops", [])
         success_count = len(successful_ops)
         failure_count = len(failed_ops)
+        cancelled = bool(data.get("cancelled"))
 
-        if success_count == 0 and failure_count == 0:
+        if success_count == 0 and failure_count == 0 and not cancelled:
             summary = "No valid video files were found. Nothing was generated."
             self.status_lbl.configure(text=summary)
             messagebox.showwarning("Generation Complete", summary)
             return
 
-        if failure_count == 0:
+        if failure_count == 0 and not cancelled:
             summary = f"Generation complete: {success_count} movieprint(s) created."
             self.status_lbl.configure(text=summary)
             messagebox.showinfo("Generation Complete", summary)
@@ -1373,9 +1417,17 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         if success_count == 0:
             summary = f"Generation failed: {failure_count} movieprint(s) failed."
 
+        if cancelled:
+            summary = f"Generation cancelled: {success_count} completed before cancellation."
+            if failure_count:
+                summary += f" {failure_count} failed."
+
         first_failure = failed_ops[0].get("reason") if failed_ops else None
         if first_failure:
-            summary += f"\n\nFirst error: {first_failure}"
+            first_file = failed_ops[0].get("video")
+            if first_file:
+                summary += f"\n\nFirst failed file: {first_file}"
+            summary += f"\nWhat happened: {first_failure}"
         self.status_lbl.configure(text=summary.split("\n", 1)[0])
         messagebox.showwarning("Generation Completed with Errors", summary)
 
@@ -1474,7 +1526,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _show_batch_output_collision_error(self, collisions):
         first = collisions[0]
-        videos = "\n".join(f"- {os.path.basename(path)}" for path in first['videos'][:4])
+        videos = "\n".join(f"- {path}" for path in first['videos'][:4])
         if len(first['videos']) > 4:
             videos += f"\n- plus {len(first['videos']) - 4} more"
         messagebox.showerror(
@@ -1589,13 +1641,20 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
              messagebox.showerror("Error", str(e))
              return
 
-        collisions = self._find_batch_output_collisions(settings)
+        try:
+            collisions = self._find_batch_output_collisions(settings)
+        except ValueError as error:
+            messagebox.showerror("Naming Error", str(error))
+            return
         if collisions:
             self._show_batch_output_collision_error(collisions)
             return
         
         self.status_lbl.configure(text="Generating...")
         self.progress_bar.configure(mode="determinate")
+        self.active_cancel_event = threading.Event()
+        self.active_job_kind = "generation"
+        settings.cancel_event = self.active_cancel_event
         self._set_busy(True)
         
         threading.Thread(
@@ -1620,6 +1679,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self.queue.put(("generation_done", {
                 "successful_ops": successful_ops,
                 "failed_ops": failed_ops,
+                "cancelled": bool(getattr(settings, "cancelled", False)),
             }))
             self.queue.put(("busy", False))
 
@@ -1635,15 +1695,37 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self.input_entry.delete(0, tk.END)
             self.input_entry.insert(0, self.input_paths_var.get())
 
+    def _add_batch_paths(self, paths):
+        added = 0
+        existing_keys = {os.path.normcase(os.path.abspath(path)) for path in self.batch_file_list}
+        for path in paths:
+            normalised_path = os.path.abspath(path)
+            key = os.path.normcase(normalised_path)
+            if key in existing_keys:
+                continue
+            self.batch_file_list.append(normalised_path)
+            self.batch_listbox.insert(tk.END, normalised_path)
+            existing_keys.add(key)
+            added += 1
+        if paths and not added:
+            self.status_lbl.configure(text="Those items are already in the batch queue.")
+
+    def browse_batch_files(self):
+        filepaths = filedialog.askopenfilenames(title="Add Video Files to Batch Queue")
+        if filepaths:
+            self._add_batch_paths(filepaths)
+
+    def browse_batch_folder(self):
+        folder = filedialog.askdirectory(title="Add Folder to Batch Queue")
+        if folder:
+            self._add_batch_paths([folder])
+
     def handle_drop(self, event):
         paths = self.tk.splitlist(event.data)
         if not paths: return
         active_tab = self.input_tabs.get()
         if active_tab == "Batch Queue":
-            for p in paths:
-                if p not in self.batch_file_list:
-                    self.batch_file_list.append(p)
-                    self.batch_listbox.insert(tk.END, p)
+            self._add_batch_paths(paths)
         else:
             self._internal_input_paths = list(paths)
             self.input_paths_var.set("; ".join(paths))
