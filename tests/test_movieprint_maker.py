@@ -149,7 +149,8 @@ class MoviePrintMakerTests(unittest.TestCase):
 
             fake_meta = [{"frame_path": os.path.join(temp_frames, "frame_000.jpg"), "timestamp_sec": 1.0}]
 
-            with mock.patch.object(movieprint_maker, "_setup_temp_directory", return_value=(temp_frames, False, None)), \
+            with mock.patch.object(movieprint_maker.video_processing.shutil, "which", return_value="ffmpeg"), \
+                 mock.patch.object(movieprint_maker, "_setup_temp_directory", return_value=(temp_frames, False, None)), \
                  mock.patch.object(movieprint_maker, "_extract_frames", return_value=(True, fake_meta)), \
                  mock.patch.object(movieprint_maker, "_apply_exclusions", return_value=(fake_meta, [])), \
                  mock.patch.object(movieprint_maker, "_limit_frames_for_grid", return_value=fake_meta), \
