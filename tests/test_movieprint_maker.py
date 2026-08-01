@@ -2,6 +2,7 @@ import logging
 import os
 import sys
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -52,6 +53,18 @@ class MoviePrintMakerTests(unittest.TestCase):
 
             self.assertEqual(non_recursive, [top_video])
             self.assertEqual(recursive, sorted([top_video, nested_video]))
+
+    def test_discover_video_files_deduplicates_overlapping_inputs(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video = os.path.join(tmp, "clip.mp4")
+            with open(video, "w", encoding="utf-8") as f:
+                f.write("video")
+
+            discovered = movieprint_maker.discover_video_files(
+                [tmp, video], ".mp4", recursive_scan=True, logger=self.logger
+            )
+
+            self.assertEqual(discovered, [video])
 
     def test_fixed_name_batch_allows_unique_source_folders(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -136,7 +149,8 @@ class MoviePrintMakerTests(unittest.TestCase):
 
             fake_meta = [{"frame_path": os.path.join(temp_frames, "frame_000.jpg"), "timestamp_sec": 1.0}]
 
-            with mock.patch.object(movieprint_maker, "_setup_temp_directory", return_value=(temp_frames, False, None)), \
+            with mock.patch.object(movieprint_maker.video_processing.shutil, "which", return_value="ffmpeg"), \
+                 mock.patch.object(movieprint_maker, "_setup_temp_directory", return_value=(temp_frames, False, None)), \
                  mock.patch.object(movieprint_maker, "_extract_frames", return_value=(True, fake_meta)), \
                  mock.patch.object(movieprint_maker, "_apply_exclusions", return_value=(fake_meta, [])), \
                  mock.patch.object(movieprint_maker, "_limit_frames_for_grid", return_value=fake_meta), \
@@ -184,6 +198,125 @@ class MoviePrintMakerTests(unittest.TestCase):
             self.assertEqual(ok, [])
             self.assertEqual(failed, [])
             process_mock.assert_not_called()
+
+    def test_execute_skip_mode_uses_existing_frame_export_folder(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video_path = os.path.join(tmp, "clip.mp4")
+            with open(video_path, "w", encoding="utf-8") as f:
+                f.write("video")
+            os.makedirs(os.path.join(tmp, "clip_movieprint_frames"), exist_ok=True)
+
+            settings = SimpleNamespace(
+                input_paths=[video_path], video_extensions=".mp4", recursive_scan=False,
+                frame_format="jpg", output_naming_mode="suffix", output_filename="",
+                output_filename_suffix="_movieprint", overwrite_mode="skip",
+                output_frames_only=True, output_dir=None, individual_frames_output_dir="",
+            )
+
+            with mock.patch.object(movieprint_maker, "_ensure_cv2_available", return_value=None), \
+                 mock.patch.object(movieprint_maker, "process_single_video") as process_mock:
+                successful, failed = movieprint_maker.execute_movieprint_generation(settings, self.logger)
+
+            self.assertEqual(successful, [])
+            self.assertEqual(failed, [])
+            process_mock.assert_not_called()
+
+    def test_execute_blocks_colliding_outputs_without_processing(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            first = os.path.join(tmp, "part1.mp4")
+            second = os.path.join(tmp, "part2.mp4")
+            for path in (first, second):
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write("video")
+
+            settings = SimpleNamespace(
+                input_paths=[tmp], video_extensions=".mp4", recursive_scan=False,
+                frame_format="jpg", output_naming_mode="custom", output_filename="movieprint",
+                overwrite_mode="overwrite", output_frames_only=False, output_dir=None,
+                individual_frames_output_dir="",
+            )
+
+            with mock.patch.object(movieprint_maker, "_ensure_cv2_available", return_value=None), \
+                 mock.patch.object(movieprint_maker, "process_single_video") as process_mock:
+                successful, failed = movieprint_maker.execute_movieprint_generation(settings, self.logger)
+
+            self.assertEqual(successful, [])
+            self.assertEqual({entry["video"] for entry in failed}, {first, second})
+            self.assertTrue(all("collision" in entry["reason"] for entry in failed))
+            process_mock.assert_not_called()
+
+    def test_execute_cancellation_stops_before_processing_next_video(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video_path = os.path.join(tmp, "clip.mp4")
+            with open(video_path, "w", encoding="utf-8") as f:
+                f.write("video")
+            cancel_event = threading.Event()
+            cancel_event.set()
+            settings = SimpleNamespace(
+                input_paths=[video_path], video_extensions=".mp4", recursive_scan=False,
+                frame_format="jpg", output_naming_mode="suffix", output_filename="",
+                output_filename_suffix="_movieprint", overwrite_mode="overwrite",
+                output_frames_only=False, output_dir=None, individual_frames_output_dir="",
+                cancel_event=cancel_event,
+            )
+
+            with mock.patch.object(movieprint_maker, "_ensure_cv2_available", return_value=None), \
+                 mock.patch.object(movieprint_maker, "process_single_video") as process_mock:
+                successful, failed = movieprint_maker.execute_movieprint_generation(settings, self.logger)
+
+            self.assertEqual(successful, [])
+            self.assertEqual(failed, [])
+            self.assertTrue(settings.cancelled)
+            process_mock.assert_not_called()
+
+    def test_execute_reports_invalid_custom_name_per_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video_path = os.path.join(tmp, "clip.mp4")
+            with open(video_path, "w", encoding="utf-8") as f:
+                f.write("video")
+            settings = SimpleNamespace(
+                input_paths=[video_path], video_extensions=".mp4", recursive_scan=False,
+                frame_format="jpg", output_naming_mode="custom", output_filename="nested/name",
+                overwrite_mode="overwrite", output_frames_only=False, output_dir=None,
+                individual_frames_output_dir="",
+            )
+
+            with mock.patch.object(movieprint_maker, "_ensure_cv2_available", return_value=None):
+                successful, failed = movieprint_maker.execute_movieprint_generation(settings, self.logger)
+
+            self.assertEqual(successful, [])
+            self.assertEqual(failed[0]["video"], video_path)
+            self.assertIn("plain filename", failed[0]["reason"])
+
+    def test_execute_reports_missing_ffmpeg_for_each_source(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            video_path = os.path.join(tmp, "clip.mp4")
+            with open(video_path, "w", encoding="utf-8") as f:
+                f.write("video")
+            settings = SimpleNamespace(
+                input_paths=[video_path], video_extensions=".mp4", recursive_scan=False,
+                frame_format="jpg", output_naming_mode="suffix", output_filename="",
+                output_filename_suffix="_movieprint", overwrite_mode="overwrite",
+                output_frames_only=False, output_dir=None, individual_frames_output_dir="",
+            )
+
+            with mock.patch.object(movieprint_maker, "_ensure_cv2_available", return_value=None), \
+                 mock.patch.object(movieprint_maker.video_processing.shutil, "which", return_value=None):
+                successful, failed = movieprint_maker.execute_movieprint_generation(settings, self.logger)
+
+            self.assertEqual(successful, [])
+            self.assertEqual(failed[0]["video"], video_path)
+            self.assertIn("FFmpeg was not found", failed[0]["reason"])
+
+    def test_custom_name_rejects_windows_folder_components(self):
+        settings = SimpleNamespace(
+            frame_format="jpg",
+            output_naming_mode="custom",
+            output_filename=r"C:\\movieprints\\movieprint",
+        )
+
+        with self.assertRaisesRegex(ValueError, "plain filename"):
+            movieprint_maker.get_effective_output_filename(r"C:\\Movies\\clip.mp4", settings)
 
     def test_limit_frames_for_grid_allows_single_selection(self):
         metadata = [

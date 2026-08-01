@@ -147,6 +147,12 @@ def find_output_path_collisions(video_files, settings):
 
     return [group for group in outputs_by_key.values() if len(group['videos']) > 1]
 
+
+def _is_cancelled(settings):
+    """Return whether a GUI-owned batch cancellation has been requested."""
+    cancel_event = getattr(settings, 'cancel_event', None)
+    return bool(cancel_event and cancel_event.is_set())
+
 def enforce_max_filesize(image_path, target_kb, logger):
     """Iteratively reduces image quality/size to meet a target file size (KB)."""
     if target_kb is None: return
@@ -511,6 +517,12 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
     """Main pipeline for processing a single video file."""
     logger.info(f"\nProcessing video: {video_file_path}...")
 
+    if not shutil.which(video_processing.FFMPEG_BIN):
+        return False, (
+            "FFmpeg was not found on PATH. Install FFmpeg, restart PyMoviePrint, "
+            "and confirm that 'ffmpeg -version' works in a terminal."
+        )
+
     # 1. Path Resolution
     configured_output_dir = getattr(settings, 'output_dir', None)
     if configured_output_dir:
@@ -611,21 +623,55 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
     # Mode for overwriting
     overwrite_mode = getattr(settings, 'overwrite_mode', 'overwrite')
 
+    # Protect CLI and GUI callers alike. A fixed name is valid across separate
+    # source folders, but never when two sources target the same final path.
+    try:
+        collision_groups = find_output_path_collisions(video_files_to_process, settings)
+    except ValueError as error:
+        logger.error("Invalid output naming configuration: %s", error)
+        return [], [
+            {'video': video_path, 'reason': str(error)}
+            for video_path in video_files_to_process
+        ]
+    colliding_videos = set()
+    for group in collision_groups:
+        colliding_videos.update(group['videos'])
+        logger.error(
+            "Output collision: %s would be written by: %s",
+            group['output'],
+            ", ".join(group['videos']),
+        )
+
+    for video_path in sorted(colliding_videos):
+        failed_ops.append({
+            'video': video_path,
+            'reason': (
+                "Output filename collision. Choose Add Suffix, change the Fixed Name, "
+                "or process videos from this folder separately."
+            ),
+        })
+
     for i, video_path in enumerate(video_files_to_process):
+        if _is_cancelled(settings):
+            logger.info("Cancellation requested. Stopping before the next video.")
+            setattr(settings, 'cancelled', True)
+            break
+
         if progress_callback: progress_callback(i, total_videos, video_path)
 
-        # Naming Logic (Calculated early for skip check)
-        effective_output_name = get_effective_output_filename(video_path, settings)
+        if video_path in colliding_videos:
+            continue
 
-        # 2. Skip Check
-        full_output_path = get_target_output_path(video_path, settings, effective_output_name)
+        try:
+            # Naming logic must be per-file so one bad custom name does not
+            # leave the GUI worker stuck or obscure which source triggered it.
+            effective_output_name = get_effective_output_filename(video_path, settings)
+            full_output_path = get_target_output_path(video_path, settings, effective_output_name)
 
-        if not getattr(settings, 'output_frames_only', False):
             if overwrite_mode == 'skip' and os.path.exists(full_output_path):
                 logger.info(f"Skipping {video_path} (Output exists: {effective_output_name})")
                 continue
 
-        try:
             success, message_or_path = process_single_video(
                 video_path, settings, effective_output_name, logger, fast_preview=fast_preview
             )
