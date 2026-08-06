@@ -481,6 +481,28 @@ def _export_individual_frames(metadata_list, output_dir, settings, logger):
     logger.info(f"  Exported {len(copied)} individual frames to {output_dir}")
     return True, output_dir
 
+def _clear_generated_frame_files(output_dir, logger):
+    """Remove only PyMoviePrint-generated files from an existing frame-export folder."""
+    if not os.path.isdir(output_dir):
+        return False, f"Frame export target exists but is not a folder: {output_dir}"
+
+    generated_name = re.compile(
+        r"^frame_\d{4,}(?:_[0-9eE+p-]+s)?\.(?:jpe?g|png)$",
+        re.IGNORECASE,
+    )
+
+    for name in os.listdir(output_dir):
+        path = os.path.join(output_dir, name)
+        if not os.path.isfile(path) or not generated_name.fullmatch(name):
+            continue
+        try:
+            os.remove(path)
+        except OSError as error:
+            logger.error("Could not remove previous frame export %s: %s", path, error)
+            return False, f"Could not clear previous frame export: {path}: {error}"
+
+    return True, None
+
 def _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, process_warnings, movieprint_path, logger, source_video_path=None):
     """Saves metadata JSON. STRICTLY DISABLED if save_metadata_json is False."""
     if not getattr(settings, 'save_metadata_json', False): return
@@ -575,7 +597,9 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
                 if overwrite_mode == 'skip':
                     logger.info(f"Skipping frame export for {video_file_path} (Folder exists: {final_path})")
                     return True, final_path
-                shutil.rmtree(final_path, ignore_errors=True)
+                cleared, clear_error = _clear_generated_frame_files(final_path, logger)
+                if not cleared:
+                    return False, clear_error
 
             success, message_or_path = _export_individual_frames(metadata_list, final_path, settings, logger)
             if not success:
