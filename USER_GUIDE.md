@@ -176,6 +176,8 @@ python movieprint_maker.py hdr_input.mkv ./output \
 - `--output_width`
 - `--output_height`
 
+When fixed grid output is requested without `--rows` or an interval, PyMoviePrint uses five rows so the documented wallpaper workflow works without extra sampling arguments.
+
 ## 5.6 Styling & Output
 
 - `--padding`
@@ -192,8 +194,11 @@ python movieprint_maker.py hdr_input.mkv ./output \
 - `--save_metadata_json`
 - `--show_header`
 - `--show_file_path`
+- `--hide_file_path`
 - `--show_timecode`
+- `--hide_timecode`
 - `--show_frame_num`
+- `--hide_frame_num`
 - `--frame_info_show`
 - `--frame_info_timecode_or_frame`
 - `--frame_info_position`

@@ -515,6 +515,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.zoom_level_var = tk.DoubleVar(value=1.0)
         
         self.output_naming_mode_var = tk.StringVar(value=default_settings.output_naming_mode)
+        self.naming_mode_display_var = tk.StringVar(
+            value="Fixed Name" if default_settings.output_naming_mode == "custom" else "Add Suffix"
+        )
         self.output_filename_suffix_var = tk.StringVar(value=default_settings.output_filename_suffix)
         self.output_filename_var = tk.StringVar(value=default_settings.output_filename)
 
@@ -844,7 +847,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.naming_mode_seg = ctk.CTkSegmentedButton(
             parent, 
             values=["Add Suffix", "Fixed Name"], 
-            variable=self.output_naming_mode_var,
+            variable=self.naming_mode_display_var,
             command=self._toggle_naming_inputs,
             selected_color=Theme.ACTION_GOLD,
             selected_hover_color=Theme.ACTION_GOLD_HOVER
@@ -967,18 +970,21 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _toggle_naming_inputs(self, mode=None):
         if mode is None: mode = self.output_naming_mode_var.get()
+        is_custom = mode in {"Fixed Name", "custom"}
         self.lbl_suffix.pack_forget()
         self.entry_suffix.pack_forget()
         self.lbl_custom.pack_forget()
         self.entry_custom.pack_forget()
-        if mode == "Fixed Name":
+        if is_custom:
             self.lbl_custom.pack(anchor="w", pady=(2,0))
             self.entry_custom.pack(fill="x", pady=(0,5))
             self.output_naming_mode_var.set("custom")
+            self.naming_mode_display_var.set("Fixed Name")
         else:
             self.lbl_suffix.pack(anchor="w", pady=(2,0))
             self.entry_suffix.pack(fill="x", pady=(0,5))
             self.output_naming_mode_var.set("suffix")
+            self.naming_mode_display_var.set("Add Suffix")
 
     # --- LOGIC ---
     def _set_busy(self, busy: bool):
@@ -1107,6 +1113,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             'rotation': settings.rotate_thumbnails,
             'grid_margin': settings.grid_margin,
             'show_header': settings.show_header,
+            'show_file_path': settings.show_file_path,
+            'show_timecode': settings.show_timecode,
+            'show_frame_num': settings.show_frame_num,
             'frame_info_show': settings.frame_info_show,
             'layout_mode': settings.layout_mode,
             'target_row_height': settings.target_row_height,
@@ -1114,6 +1123,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             'fit_to_output_params': settings.fit_to_output_params,
             'output_width': settings.output_width,
             'output_height': settings.output_height,
+            'quality': settings.preview_quality,
         }
 
         success, layout = DependencyManager.image_grid.create_image_grid(**grid_params)
@@ -1130,6 +1140,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 'timestamp_sec': item.get('timestamp_sec'),
                 'frame_number': item.get('frame_number'),
                 'video_filename': item.get('video_filename'),
+                'video_path': item.get('video_path'),
             }
             if layout_mode == 'timeline':
                 entry['width_ratio'] = item.get('duration_frames', 1.0)
@@ -1215,8 +1226,12 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             'padding': int(self.padding_var.get()),
             'rounded': int(self.rounded_corners_var.get()),
             'show_header': self.show_header_var.get(),
+            'show_file_path': self.show_file_path_var.get(),
+            'show_timecode': self.show_timecode_var.get(),
+            'show_frame_num': self.show_frame_num_var.get(),
             'target_row_height': int(self.target_row_height_var.get() or 150),
             'frame_info_show': self.frame_info_show_var.get(),
+            'preview_quality': int(self.preview_quality_var.get()),
             'hdr_tonemap': self.hdr_tonemap_var.get(),
             'hdr_algorithm': self.hdr_algorithm_var.get(),
             'fit_to_output_params': self.fit_to_output_params_var.get(),
@@ -1310,7 +1325,12 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     logger=logger,
                     rounded_corners=config['rounded'], 
                     rotation=config['rotate_thumbnails'],
+                    show_header=config['show_header'],
+                    show_file_path=config['show_file_path'],
+                    show_timecode=config['show_timecode'],
+                    show_frame_num=config['show_frame_num'],
                     frame_info_show=config['frame_info_show'],
+                    quality=config['preview_quality'],
                     fit_to_output_params=config['fit_to_output_params'],
                     output_width=config['output_width'],
                     output_height=config['output_height']
@@ -1338,18 +1358,6 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _process_preview_thumbnails(self, meta_list, config, logger):
         cv2 = DependencyManager.video_processing.cv2
-        if config['rotate_thumbnails'] != 0:
-            self.queue.put(("log", "Rotating thumbnails..."))
-            rot_flag = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(config['rotate_thumbnails'])
-            if rot_flag is not None:
-                for item in meta_list:
-                    try:
-                        img = cv2.imread(item['frame_path'])
-                        if img is not None:
-                            img = cv2.rotate(img, rot_flag)
-                            cv2.imwrite(item['frame_path'], img)
-                    except Exception as e:
-                        logger.warning(f"Preview thumbnail rotation failed for {item.get('frame_path')}: {e}")
         if config['detect_faces']:
             self.queue.put(("log", "Detecting faces (Preview)..."))
             cascade_path = os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
@@ -1450,7 +1458,12 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             logger=logging.getLogger("refresh"),
             rounded_corners=int(self.rounded_corners_var.get()),
             rotation=int(self.rotate_thumbnails_var.get()),
+            show_header=self.show_header_var.get(),
+            show_file_path=self.show_file_path_var.get(),
+            show_timecode=self.show_timecode_var.get(),
+            show_frame_num=self.show_frame_num_var.get(),
             frame_info_show=self.frame_info_show_var.get(),
+            quality=int(self.preview_quality_var.get()),
             fit_to_output_params=self.fit_to_output_params_var.get(),
             output_width=int(self.output_width_var.get()),
             output_height=int(self.output_height_var.get())

@@ -326,7 +326,8 @@ class VideoExtractor:
                     'frame_path': final_path,
                     'frame_number': int(ts * fps),
                     'timestamp_sec': ts,
-                    'video_filename': self.video_filename
+                    'video_filename': self.video_filename,
+                    'video_path': os.path.abspath(self.video_path),
                 }
             return None
 
@@ -442,8 +443,11 @@ class VideoExtractor:
         if fps <= 0: fps = 24.0
 
         filters = []
+        use_variable_frame_rate = False
         if interval_sec: filters.append(f"fps=1/{interval_sec:.5f}")
-        elif interval_frames: filters.append(f"select='not(mod(n,{interval_frames}))',vsync=vfr")
+        elif interval_frames:
+            filters.append(f"select='not(mod(n,{interval_frames}))'")
+            use_variable_frame_rate = True
         else: filters.append("fps=1")
 
         if hdr_tonemap: 
@@ -466,24 +470,33 @@ class VideoExtractor:
         if use_gpu and VideoUtils.check_ffmpeg_gpu(self.logger):
             base_cmd.extend(['-hwaccel', 'cuda'])
 
-        input_args = ['-ss', str(start_time), '-i', self.video_path, '-sn', '-an', '-dn']
-        if end_time and (end_time - start_time > 0): 
-            input_args.extend(['-t', str(end_time - start_time)])
+        effective_start_time = 0.0 if start_time is None else start_time
+        input_args = ['-ss', str(effective_start_time), '-i', self.video_path, '-sn', '-an', '-dn']
+        if end_time and (end_time - effective_start_time > 0):
+            input_args.extend(['-t', str(end_time - effective_start_time)])
 
         output_args = [
-            '-vf', vf_filter, 
-            '-frame_pts', '1', 
-            '-q:v', q_scale, 
-            output_pattern, 
-            '-y', '-hide_banner', '-loglevel', 'error'
+            '-vf', vf_filter,
         ]
+        if use_variable_frame_rate:
+            output_args.extend(['-vsync', 'vfr'])
+        output_args.extend([
+            '-frame_pts', '1',
+            '-q:v', q_scale,
+            output_pattern,
+            '-y', '-hide_banner', '-loglevel', 'error'
+        ])
 
         if not VideoUtils.run_ffmpeg_command(base_cmd + input_args + output_args, self.logger):
             return []
 
         generated_files = sorted(glob.glob(os.path.join(output_folder, f"ffmpeg_out_*.{ext}")))
         for i, file_path in enumerate(generated_files):
-            est_time = start_time + (i * interval_sec) if interval_sec else (i * interval_frames / fps if interval_frames else 0)
+            est_time = effective_start_time + (
+                (i * interval_sec)
+                if interval_sec
+                else (i * interval_frames / fps if interval_frames else 0)
+            )
             est_frame = int(est_time * fps)
             final_path = os.path.join(output_folder, f"frame_{i:05d}_absFN{est_frame}.{ext}")
             try:
@@ -492,7 +505,8 @@ class VideoExtractor:
                     'frame_path': final_path, 
                     'frame_number': est_frame, 
                     'timestamp_sec': round(est_time, 3), 
-                    'video_filename': self.video_filename
+                    'video_filename': self.video_filename,
+                    'video_path': os.path.abspath(self.video_path),
                 })
             except OSError as e:
                 self.logger.warning(f"Could not finalize extracted frame '{file_path}': {e}")
