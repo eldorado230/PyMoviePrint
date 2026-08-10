@@ -235,6 +235,66 @@ def _get_video_duration(video_path, logger):
         logger.warning(f"Could not determine duration for {video_path}: {e}")
     return 0.0
 
+def _timestamp_key(value):
+    try:
+        return round(float(value), 9)
+    except (TypeError, ValueError):
+        return None
+
+def _merge_manual_thumbnail_metadata(metadata_list, settings, logger):
+    """Restore preview/editor metadata onto freshly extracted final-quality frames."""
+    requested_metadata = getattr(settings, 'manual_thumbnail_metadata', None)
+    if not requested_metadata:
+        return metadata_list
+
+    by_timestamp = {}
+    without_timestamp = []
+    for extracted in metadata_list:
+        key = _timestamp_key(extracted.get('timestamp_sec'))
+        if key is None:
+            without_timestamp.append(extracted)
+        else:
+            by_timestamp.setdefault(key, []).append(extracted)
+
+    merged = []
+    for requested in requested_metadata:
+        if not isinstance(requested, dict):
+            continue
+        key = _timestamp_key(requested.get('timestamp_sec'))
+        candidates = by_timestamp.get(key, []) if key is not None else []
+        if candidates:
+            extracted = candidates.pop(0)
+        elif without_timestamp:
+            extracted = without_timestamp.pop(0)
+        else:
+            logger.warning(
+                "  Final extraction did not return the preview thumbnail at %r.",
+                requested.get('timestamp_sec'),
+            )
+            continue
+
+        combined = dict(extracted)
+        for field, value in requested.items():
+            if field in {'frame_path', 'video_path', 'video_filename'}:
+                continue
+            combined[field] = value
+
+        # The final-quality extraction owns physical source information.
+        for field in ('frame_path', 'video_path', 'video_filename', 'timestamp_sec', 'frame_number'):
+            if field in extracted:
+                combined[field] = extracted[field]
+        merged.append(combined)
+
+    leftovers = [item for values in by_timestamp.values() for item in values]
+    leftovers.extend(without_timestamp)
+    if leftovers:
+        logger.warning(
+            "  %d final frame(s) had no matching preview metadata; preserving them at the end.",
+            len(leftovers),
+        )
+        merged.extend(leftovers)
+    return merged
+
 def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, logger, fast_preview=False):
     """Orchestrates frame extraction based on layout and extraction modes."""
     
@@ -245,16 +305,19 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
     # 1. Manual Timestamps (from Scrubbing/GUI)
     if hasattr(settings, 'manual_timestamps') and settings.manual_timestamps:
         logger.info(f"  Using {len(settings.manual_timestamps)} manual timestamps provided by GUI.")
-        return video_processing.extract_frames_from_timestamps(
-            video_path=video_file_path, 
-            timestamps=settings.manual_timestamps, 
-            output_folder=temp_dir, 
-            logger=logger, 
+        success, extracted = video_processing.extract_frames_from_timestamps(
+            video_path=video_file_path,
+            timestamps=settings.manual_timestamps,
+            output_folder=temp_dir,
+            logger=logger,
             output_format=settings.frame_format,
             fast_preview=fast_preview,
             hdr_tonemap=hdr_tonemap,
             hdr_algorithm=hdr_algo
         )
+        if success and extracted:
+            extracted = _merge_manual_thumbnail_metadata(extracted, settings, logger)
+        return success, extracted
 
     # 2. Grid Mode (Calculated Timestamps)
     if settings.layout_mode == "grid" and getattr(settings, 'columns', None) and getattr(settings, 'rows', None):
@@ -387,21 +450,14 @@ def _process_thumbnails(metadata_list, settings, logger):
 def _generate_movieprint(metadata_list, settings, output_path, logger):
     """Generates the final image using image_grid."""
     items_for_grid = []
-    if settings.layout_mode == "timeline":
-        items_for_grid = [{'image_path': sm['frame_path'],
-                           'width_ratio': float(sm.get('duration_frames', 1.0)),
-                           'timestamp_sec': sm.get('timestamp_sec'),
-                           'frame_number': sm.get('frame_number'),
-                           'video_filename': sm.get('video_filename'),
-                           'video_path': sm.get('video_path')}
-                          for sm in metadata_list if sm.get('duration_frames', 0) > 0]
-    else:
-        items_for_grid = [{'image_path': meta['frame_path'],
-                           'timestamp_sec': meta.get('timestamp_sec'),
-                           'frame_number': meta.get('frame_number'),
-                           'video_filename': meta.get('video_filename'),
-                           'video_path': meta.get('video_path')}
-                          for meta in metadata_list]
+    for meta in metadata_list:
+        if settings.layout_mode == "timeline" and float(meta.get('duration_frames') or 0) <= 0:
+            continue
+        item = dict(meta)
+        item['image_path'] = meta['frame_path']
+        if settings.layout_mode == "timeline":
+            item['width_ratio'] = float(meta.get('duration_frames') or 1.0)
+        items_for_grid.append(item)
 
     if not items_for_grid:
         return False, None, "No frames available for grid generation."
@@ -487,30 +543,32 @@ def _export_individual_frames(metadata_list, output_dir, settings, logger):
                 target_name = f"frame_{idx:04d}_{safe_ts}s.{frame_format}"
 
             target_path = os.path.join(staging_dir, target_name)
-            has_transform = any((
+            item_transform = meta.get('transform') if isinstance(meta.get('transform'), dict) else {}
+            item_aspect = meta.get('aspect_ratio') or getattr(settings, 'thumbnail_aspect_ratio', 'source')
+            has_transform = bool(item_transform) or any((
                 getattr(settings, 'crop_top', 0.0),
                 getattr(settings, 'crop_right', 0.0),
                 getattr(settings, 'crop_bottom', 0.0),
                 getattr(settings, 'crop_left', 0.0),
                 getattr(settings, 'rotate_thumbnails', 0),
-                getattr(settings, 'thumbnail_aspect_ratio', 'source') != 'source',
+                item_aspect != 'source',
             ))
             if not has_transform:
                 shutil.copy2(source_path, target_path)
             else:
                 with Image.open(source_path) as source_image:
-                    transformed = image_grid._apply_crop(
-                        source_image,
-                        getattr(settings, 'crop_top', 0.0),
-                        getattr(settings, 'crop_right', 0.0),
-                        getattr(settings, 'crop_bottom', 0.0),
-                        getattr(settings, 'crop_left', 0.0),
+                    transform_config = image_grid.GridConfig(
+                        output_path=target_path,
+                        rotation=getattr(settings, 'rotate_thumbnails', 0),
+                        crop_top=getattr(settings, 'crop_top', 0.0),
+                        crop_right=getattr(settings, 'crop_right', 0.0),
+                        crop_bottom=getattr(settings, 'crop_bottom', 0.0),
+                        crop_left=getattr(settings, 'crop_left', 0.0),
+                        thumbnail_aspect_ratio=getattr(settings, 'thumbnail_aspect_ratio', 'source'),
                     )
-                    transformed = image_grid._apply_rotation(
-                        transformed, getattr(settings, 'rotate_thumbnails', 0)
-                    )
+                    transformed = image_grid._apply_source_transform(source_image, meta, transform_config)
                     aspect = image_grid._aspect_value(
-                        getattr(settings, 'thumbnail_aspect_ratio', 'source')
+                        meta.get('aspect_ratio', transform_config.thumbnail_aspect_ratio)
                     )
                     if aspect:
                         target_w = transformed.width

@@ -8,6 +8,7 @@ import sys
 import shutil
 import tempfile
 import argparse
+import copy
 import threading
 import queue
 import time
@@ -1295,6 +1296,12 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             'show_timecode': settings.show_timecode,
             'show_frame_num': settings.show_frame_num,
             'frame_info_show': settings.frame_info_show,
+            'frame_info_timecode_or_frame': settings.frame_info_timecode_or_frame,
+            'frame_info_font_color': settings.frame_info_font_color,
+            'frame_info_bg_color': settings.frame_info_bg_color,
+            'frame_info_position': settings.frame_info_position,
+            'frame_info_size': settings.frame_info_size,
+            'frame_info_margin': settings.frame_info_margin,
             'layout_mode': settings.layout_mode,
             'target_row_height': settings.target_row_height,
             # NEW PARAMS
@@ -1347,6 +1354,16 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             'sort_mode': self.sort_mode_var.get(),
             'filter_mode': self.filter_mode_var.get(),
         }
+
+    @staticmethod
+    def _snapshot_render_metadata(metadata):
+        """Copy editable thumbnail state without reusing low-resolution preview files."""
+        snapshots = []
+        for item in metadata or []:
+            snapshot = copy.deepcopy(item)
+            snapshot.pop('frame_path', None)
+            snapshots.append(snapshot)
+        return snapshots
 
     # --- PROJECT WORKSPACE ---
     def _refresh_sheet_controls(self):
@@ -1759,6 +1776,12 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             'show_frame_num': self.show_frame_num_var.get(),
             'target_row_height': int(self.target_row_height_var.get() or 150),
             'frame_info_show': self.frame_info_show_var.get(),
+            'frame_info_timecode_or_frame': self.frame_info_timecode_or_frame_var.get(),
+            'frame_info_font_color': self.frame_info_font_color_var.get(),
+            'frame_info_bg_color': self.frame_info_bg_color_var.get(),
+            'frame_info_position': self.frame_info_position_var.get(),
+            'frame_info_size': int(self.frame_info_size_var.get()),
+            'frame_info_margin': int(self.frame_info_margin_var.get()),
             'preview_quality': int(self.preview_quality_var.get()),
             'hdr_tonemap': self.hdr_tonemap_var.get(),
             'hdr_algorithm': self.hdr_algorithm_var.get(),
@@ -1866,6 +1889,12 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     show_timecode=config['show_timecode'],
                     show_frame_num=config['show_frame_num'],
                     frame_info_show=config['frame_info_show'],
+                    frame_info_timecode_or_frame=config['frame_info_timecode_or_frame'],
+                    frame_info_font_color=config['frame_info_font_color'],
+                    frame_info_bg_color=config['frame_info_bg_color'],
+                    frame_info_position=config['frame_info_position'],
+                    frame_info_size=config['frame_info_size'],
+                    frame_info_margin=config['frame_info_margin'],
                     quality=config['preview_quality'],
                     fit_to_output_params=config['fit_to_output_params'],
                     output_width=config['output_width'],
@@ -1912,10 +1941,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                         if img is None: continue
                         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
                         faces = face_cascade.detectMultiScale(gray, 1.1, 4)
-                        if len(faces) > 0:
-                            for (x, y, w, h) in faces:
-                                cv2.rectangle(img, (x, y), (x+w, y+h), (0, 255, 0), 2)
-                            cv2.imwrite(item['frame_path'], img)
+                        item['face_detection'] = {
+                            'num_faces': len(faces),
+                            'face_bboxes_thumbnail': [list(map(int, face)) for face in faces],
+                        }
                     except Exception as e: logger.warning(f"Face detect error: {e}")
 
     def _handle_preview_done(self, data):
@@ -2023,6 +2052,12 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             show_timecode=self.show_timecode_var.get(),
             show_frame_num=self.show_frame_num_var.get(),
             frame_info_show=self.frame_info_show_var.get(),
+            frame_info_timecode_or_frame=self.frame_info_timecode_or_frame_var.get(),
+            frame_info_font_color=self.frame_info_font_color_var.get(),
+            frame_info_bg_color=self.frame_info_bg_color_var.get(),
+            frame_info_position=self.frame_info_position_var.get(),
+            frame_info_size=int(self.frame_info_size_var.get()),
+            frame_info_margin=int(self.frame_info_margin_var.get()),
             quality=int(self.preview_quality_var.get()),
             fit_to_output_params=self.fit_to_output_params_var.get(),
             output_width=int(self.output_width_var.get()),
@@ -2178,29 +2213,28 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             rows = int(self.num_rows_var.get())
             cols = int(self.num_columns_var.get())
             settings.manual_timestamps = None
-            
+            settings.manual_thumbnail_metadata = None
+
             if settings.layout_mode == "grid":
                 settings.rows = rows
                 settings.columns = cols
                 settings.max_frames_for_print = rows * cols
                 settings.target_row_height = None
                 settings.interval_seconds = None
-                if active_tab == "Single Source":
-                    current_meta = self._metadata_in_display_order()
-                    if current_meta:
-                        settings.manual_timestamps = [m.get('timestamp_sec', 0.0) for m in current_meta]
-                else:
-                    settings.manual_timestamps = None
             else:
                 settings.rows = None
                 settings.columns = None
                 settings.max_frames_for_print = None
                 settings.target_row_height = int(self.target_row_height_var.get() or 150)
                 settings.interval_seconds = None
-                if active_tab == "Single Source":
-                    current_meta = self._metadata_in_display_order()
-                    if current_meta:
-                        settings.manual_timestamps = [m.get('timestamp_sec', 0.0) for m in current_meta]
+
+            if active_tab == "Single Source":
+                current_meta = self._metadata_in_display_order()
+                if current_meta:
+                    settings.manual_timestamps = [
+                        float(item.get('timestamp_sec') or 0.0) for item in current_meta
+                    ]
+                    settings.manual_thumbnail_metadata = self._snapshot_render_metadata(current_meta)
 
             settings.padding = int(self.padding_var.get())
             settings.background_color = self.background_color_var.get()
