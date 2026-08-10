@@ -1,6 +1,6 @@
 Traceback (most recent call last):
-  File "/home/runner/work/PyMoviePrint/PyMoviePrint/.github/apply_preview_export_parity.py", line 406, in <module>
+  File "/home/runner/work/PyMoviePrint/PyMoviePrint/.github/apply_preview_export_parity.py", line 425, in <module>
     replace_once(
   File "/home/runner/work/PyMoviePrint/PyMoviePrint/.github/apply_preview_export_parity.py", line 28, in replace_once
     raise RuntimeError(f"{label}: expected exactly one indented match in {path}")
-RuntimeError: stop preview face detection from drawing export-only green boxes: expected exactly one indented match in /home/runner/work/PyMoviePrint/PyMoviePrint/movieprint_gui.py
+RuntimeError: send exact editable thumbnail metadata to final generation: expected exactly one indented match in /home/runner/work/PyMoviePrint/PyMoviePrint/movieprint_gui.py
