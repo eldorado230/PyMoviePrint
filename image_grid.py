@@ -149,12 +149,18 @@ def _format_timecode(seconds: Any) -> Optional[str]:
 
 def _frame_info_label(meta: Dict[str, Any], index: int, conf: FontConfig) -> str:
     if conf.frame_info_type == "frame":
+        if not conf.show_frame_num:
+            return ""
         frame_number = meta.get("frame_number")
         return f"#{frame_number}" if frame_number is not None else f"#{index + 1}"
 
+    if not conf.show_timecode:
+        return ""
     return _format_timecode(meta.get("timestamp_sec")) or f"#{index + 1}"
 
 def _header_text(first_path: str, first_meta: Dict[str, Any], config: GridConfig) -> str:
+    if config.font_settings.show_file_path and first_meta.get("video_path"):
+        return first_meta["video_path"]
     if config.header_title:
         return config.header_title
     return first_meta.get("video_filename") or os.path.basename(first_path)
@@ -175,16 +181,17 @@ def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], con
     if config.fit_to_output_params:
         grid_w = config.output_width
         grid_h = config.output_height
-        
+        effective_rows = config.rows or max(1, math.ceil(num_images / config.columns))
+
         # Calculate available space for thumbnails
         avail_w = grid_w - (2 * config.grid_margin) - ((config.columns - 1) * config.padding)
-        avail_h = grid_h - (2 * config.grid_margin) - header_height - ((config.rows - 1) * config.padding)
-        
+        avail_h = grid_h - (2 * config.grid_margin) - header_height - ((effective_rows - 1) * config.padding)
+
         cell_w = max(1, avail_w // config.columns)
-        cell_h = max(1, avail_h // config.rows)
+        cell_h = max(1, avail_h // effective_rows)
 
         # We process 'rows * columns' max images to ensure fit
-        max_images = config.rows * config.columns
+        max_images = effective_rows * config.columns
         image_items = image_items[:max_images]
 
     # --- Mode 2: Dynamic Growth (Standard Mode) ---
@@ -259,7 +266,8 @@ def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], con
                 if config.font_settings.frame_info_show:
                     d_tmp = ImageDraw.Draw(img)
                     label = _frame_info_label(meta, i, config.font_settings)
-                    _draw_frame_info(d_tmp, label, img.width, img.height, config.font_settings, info_font)
+                    if label:
+                        _draw_frame_info(d_tmp, label, img.width, img.height, config.font_settings, info_font)
 
                 grid_image.paste(img, (paste_x, paste_y), mask=img)
                 layout_data.append({'image_path': path, 'x': paste_x, 'y': paste_y, 'width': img.width, 'height': img.height})
@@ -330,7 +338,18 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
     if current_row: rows.append(current_row)
 
     header_height = 50 if config.font_settings.show_header else 0
-    total_grid_h = (len(rows) * (target_h + config.padding)) + header_height + (2 * config.grid_margin)
+    render_row_h = target_h
+    if config.fit_to_output_params:
+        available_h = (
+            config.output_height
+            - header_height
+            - (2 * config.grid_margin)
+            - ((len(rows) - 1) * config.padding)
+        )
+        render_row_h = max(1, available_h // len(rows))
+        total_grid_h = config.output_height
+    else:
+        total_grid_h = (len(rows) * (target_h + config.padding)) + header_height + (2 * config.grid_margin)
 
     try:
         bg_rgb = ImageColor.getrgb(config.bg_color_hex)
@@ -348,40 +367,43 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
 
     for row in rows:
         x = config.grid_margin
-        row_content_w = sum(i['w'] for i in row) + ((len(row)-1) * config.padding)
+        height_scale = render_row_h / target_h
+        row_widths = [max(1, int(i['w'] * height_scale)) for i in row]
+        row_content_w = sum(row_widths) + ((len(row)-1) * config.padding)
         available_w = max_w
 
         scale = 1.0
         if row_content_w > 0 and (len(rows) == 1 or row != rows[-1] or row_content_w > available_w):
              scale = available_w / row_content_w
 
-        for item in row:
+        for item, item_width in zip(row, row_widths):
             try:
-                draw_w = int(item['w'] * scale)
-                draw_h = target_h
+                draw_w = max(1, int(item_width * scale))
 
                 with Image.open(item['path']) as img:
                     img = _apply_rotation(img, config.rotation)
                     img = img.convert("RGBA")
-                    img = img.resize((draw_w, target_h), Image.Resampling.BICUBIC)
+                    img = img.resize((draw_w, render_row_h), Image.Resampling.BICUBIC)
 
                     if config.rounded_corners > 0:
-                        radius_scale_factor = target_h / 150.0
+                        radius_scale_factor = render_row_h / 150.0
                         scaled_radius = int(config.rounded_corners * radius_scale_factor)
                         scaled_radius = max(1, scaled_radius)
                         img = _apply_rounding(img, scaled_radius)
 
                     if config.font_settings.frame_info_show:
                         d_tmp = ImageDraw.Draw(img)
-                        _draw_frame_info(d_tmp, _frame_info_label(item['meta'], item['index'], config.font_settings), draw_w, target_h, config.font_settings, info_font)
+                        label = _frame_info_label(item['meta'], item['index'], config.font_settings)
+                        if label:
+                            _draw_frame_info(d_tmp, label, draw_w, render_row_h, config.font_settings, info_font)
 
                     grid_image.paste(img, (x, y), mask=img)
                     
-                    layout_data.append({'image_path': item['path'], 'x': x, 'y': y, 'width': draw_w, 'height': target_h})
+                    layout_data.append({'image_path': item['path'], 'x': x, 'y': y, 'width': draw_w, 'height': render_row_h})
                     x += draw_w + int(config.padding * scale)
             except Exception as e:
                 logger.warning(f"Failed to render timeline thumbnail '{item.get('path')}': {e}")
-        y += target_h + config.padding
+        y += render_row_h + config.padding
 
     if _save_image_optimized(grid_image, config.output_path, config.quality, logger):
         return True, layout_data

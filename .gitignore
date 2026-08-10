@@ -158,3 +158,11 @@ movieprint_gui_settings.json
 pymovieprint_session.log
 bench_out/
 automation/
+
+# Local audit, smoke-test, and generated media artifacts
+APP_STATE_SUMMARY.txt
+pymovieprint_smoke_output/
+pymovieprint_verify_*/
+test_long*.mp4
+test_long-thumb.jpg
+tmp/

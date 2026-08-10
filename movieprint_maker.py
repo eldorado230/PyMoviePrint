@@ -259,10 +259,12 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
         logger.info("  Layout is Grid: Calculating exact timestamps for extraction.")
         
         duration = _get_video_duration(video_file_path, logger)
-        if duration > 0:
+        range_start = start_sec if start_sec is not None else 0.0
+        range_end = min(end_sec, duration) if end_sec is not None else duration
+        if duration > 0 and range_start < range_end:
             total_frames = settings.columns * settings.rows
-            step = duration / (total_frames + 1)
-            timestamps = [(i + 1) * step for i in range(total_frames)]
+            step = (range_end - range_start) / (total_frames + 1)
+            timestamps = [range_start + ((i + 1) * step) for i in range(total_frames)]
             
             return video_processing.extract_frames_from_timestamps(
                 video_path=video_file_path, 
@@ -294,7 +296,7 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
         return video_processing.extract_shot_boundary_frames(
             video_path=video_file_path, output_folder=temp_dir,
             output_format=settings.frame_format, detector_threshold=settings.shot_threshold,
-            start_time_sec=start_sec, end_time_sec=end_sec,
+            start_time_sec=start_sec if start_sec is not None else 0.0, end_time_sec=end_sec,
             logger=logger,
             hdr_tonemap=hdr_tonemap,
             hdr_algorithm=hdr_algo
@@ -395,13 +397,15 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
                            'width_ratio': float(sm.get('duration_frames', 1.0)),
                            'timestamp_sec': sm.get('timestamp_sec'),
                            'frame_number': sm.get('frame_number'),
-                           'video_filename': sm.get('video_filename')}
+                           'video_filename': sm.get('video_filename'),
+                           'video_path': sm.get('video_path')}
                           for sm in metadata_list if sm.get('duration_frames', 0) > 0]
     else:
         items_for_grid = [{'image_path': meta['frame_path'],
                            'timestamp_sec': meta.get('timestamp_sec'),
                            'frame_number': meta.get('frame_number'),
-                           'video_filename': meta.get('video_filename')}
+                           'video_filename': meta.get('video_filename'),
+                           'video_path': meta.get('video_path')}
                           for meta in metadata_list]
 
     if not items_for_grid:
@@ -454,46 +458,94 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
 
 
 def _export_individual_frames(metadata_list, output_dir, settings, logger):
-    """Exports selected thumbnails as individual frame files."""
-    os.makedirs(output_dir, exist_ok=True)
+    """Atomically replace generated frame files while preserving unrelated contents."""
+    output_dir = os.path.abspath(output_dir)
+    parent_dir = os.path.dirname(output_dir)
+    os.makedirs(parent_dir, exist_ok=True)
+    if os.path.exists(output_dir) and not os.path.isdir(output_dir):
+        return False, f"Frame export target exists but is not a folder: {output_dir}"
+
     frame_format = getattr(settings, 'frame_format', 'jpg').lower()
-    copied = []
+    staging_dir = tempfile.mkdtemp(prefix=".pymovieprint_frames_stage_", dir=parent_dir)
+    backup_dir = None
+    staged_names = []
 
-    for idx, meta in enumerate(metadata_list, 1):
-        source_path = meta.get('frame_path')
-        if not source_path or not os.path.exists(source_path):
-            continue
+    try:
+        for idx, meta in enumerate(metadata_list, 1):
+            source_path = meta.get('frame_path')
+            if not source_path or not os.path.exists(source_path):
+                continue
 
-        timestamp = meta.get('timestamp_sec')
-        if timestamp is None:
-            target_name = f"frame_{idx:04d}.{frame_format}"
-        else:
-            safe_ts = str(round(float(timestamp), 3)).replace('.', 'p')
-            target_name = f"frame_{idx:04d}_{safe_ts}s.{frame_format}"
+            timestamp = meta.get('timestamp_sec')
+            if timestamp is None:
+                target_name = f"frame_{idx:04d}.{frame_format}"
+            else:
+                safe_ts = str(round(float(timestamp), 3)).replace('.', 'p')
+                target_name = f"frame_{idx:04d}_{safe_ts}s.{frame_format}"
 
-        target_path = os.path.join(output_dir, target_name)
-        shutil.copy2(source_path, target_path)
-        copied.append(target_path)
+            shutil.copy2(source_path, os.path.join(staging_dir, target_name))
+            staged_names.append(target_name)
 
-    if not copied:
-        return False, "No frames were exported."
+        if not staged_names:
+            return False, "No frames were exported."
 
-    logger.info(f"  Exported {len(copied)} individual frames to {output_dir}")
-    return True, output_dir
+        os.makedirs(output_dir, exist_ok=True)
+        backup_dir = tempfile.mkdtemp(prefix=".pymovieprint_frames_backup_", dir=parent_dir)
+        previous_names = [
+            name for name in os.listdir(output_dir)
+            if os.path.isfile(os.path.join(output_dir, name))
+            and _is_generated_frame_name(name)
+        ]
+        committed_names = []
+
+        try:
+            for name in previous_names:
+                os.replace(os.path.join(output_dir, name), os.path.join(backup_dir, name))
+            for name in staged_names:
+                os.replace(os.path.join(staging_dir, name), os.path.join(output_dir, name))
+                committed_names.append(name)
+        except OSError as error:
+            logger.error("Could not commit frame export to %s: %s", output_dir, error)
+            for name in committed_names:
+                try:
+                    os.remove(os.path.join(output_dir, name))
+                except OSError:
+                    logger.exception("Could not remove partially committed frame %s", name)
+            for name in previous_names:
+                backup_path = os.path.join(backup_dir, name)
+                if os.path.exists(backup_path):
+                    try:
+                        os.replace(backup_path, os.path.join(output_dir, name))
+                    except OSError:
+                        logger.exception("Could not restore previous frame export %s", name)
+            return False, f"Could not replace previous frame export: {error}"
+
+        logger.info(f"  Exported {len(staged_names)} individual frames to {output_dir}")
+        return True, output_dir
+    except (OSError, TypeError, ValueError) as error:
+        logger.error("Could not stage frame export for %s: %s", output_dir, error)
+        return False, f"Could not export individual frames: {error}"
+    finally:
+        shutil.rmtree(staging_dir, ignore_errors=True)
+        if backup_dir:
+            shutil.rmtree(backup_dir, ignore_errors=True)
+
+
+def _is_generated_frame_name(name):
+    return bool(re.fullmatch(
+        r"frame_\d{4,}(?:_[0-9eE+p-]+s)?\.(?:jpe?g|png)",
+        name,
+        re.IGNORECASE,
+    ))
 
 def _clear_generated_frame_files(output_dir, logger):
     """Remove only PyMoviePrint-generated files from an existing frame-export folder."""
     if not os.path.isdir(output_dir):
         return False, f"Frame export target exists but is not a folder: {output_dir}"
 
-    generated_name = re.compile(
-        r"^frame_\d{4,}(?:_[0-9eE+p-]+s)?\.(?:jpe?g|png)$",
-        re.IGNORECASE,
-    )
-
     for name in os.listdir(output_dir):
         path = os.path.join(output_dir, name)
-        if not os.path.isfile(path) or not generated_name.fullmatch(name):
+        if not os.path.isfile(path) or not _is_generated_frame_name(name):
             continue
         try:
             os.remove(path)
@@ -597,9 +649,6 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
                 if overwrite_mode == 'skip':
                     logger.info(f"Skipping frame export for {video_file_path} (Folder exists: {final_path})")
                     return True, final_path
-                cleared, clear_error = _clear_generated_frame_files(final_path, logger)
-                if not cleared:
-                    return False, clear_error
 
             success, message_or_path = _export_individual_frames(metadata_list, final_path, settings, logger)
             if not success:
@@ -780,9 +829,12 @@ def main():
     
     # Frame Info / OSD
     style_grp.add_argument("--show_header", action="store_true", default=False)
-    style_grp.add_argument("--show_file_path", action="store_true", default=True)
-    style_grp.add_argument("--show_timecode", action="store_true", default=True)
-    style_grp.add_argument("--show_frame_num", action="store_true", default=True)
+    style_grp.add_argument("--show_file_path", dest="show_file_path", action="store_true", default=True)
+    style_grp.add_argument("--hide_file_path", dest="show_file_path", action="store_false")
+    style_grp.add_argument("--show_timecode", dest="show_timecode", action="store_true", default=True)
+    style_grp.add_argument("--hide_timecode", dest="show_timecode", action="store_false")
+    style_grp.add_argument("--show_frame_num", dest="show_frame_num", action="store_true", default=True)
+    style_grp.add_argument("--hide_frame_num", dest="show_frame_num", action="store_false")
     style_grp.add_argument("--frame_info_show", action="store_true", default=False)
     style_grp.add_argument("--frame_info_timecode_or_frame", type=str, default="timecode")
     style_grp.add_argument("--frame_info_font_color", type=str, default="#FFFFFF")
@@ -796,9 +848,25 @@ def main():
     args = parser.parse_args()
 
     # Validation
+    if (
+        args.layout_mode == "grid"
+        and args.fit_to_output_params
+        and args.rows is None
+        and args.interval_seconds is None
+        and args.interval_frames is None
+    ):
+        args.rows = 5
     if args.extraction_mode == "interval" and args.interval_seconds is None and args.interval_frames is None:
         if not (args.layout_mode == 'grid' and args.rows and args.columns):
              parser.error("Interval mode requires --interval_seconds or --interval_frames.")
+    if args.interval_seconds is not None and args.interval_seconds <= 0:
+        parser.error("--interval_seconds must be greater than zero.")
+    if args.interval_frames is not None and args.interval_frames <= 0:
+        parser.error("--interval_frames must be greater than zero.")
+    if args.columns <= 0 or (args.rows is not None and args.rows <= 0):
+        parser.error("--columns and --rows must be greater than zero.")
+    if args.output_width <= 0 or args.output_height <= 0:
+        parser.error("--output_width and --output_height must be greater than zero.")
 
     successful_ops, failed_ops = execute_movieprint_generation(
         settings=args,
@@ -813,5 +881,7 @@ def main():
         logger.info(f"Failed: {len(failed_ops)}")
         for f in failed_ops: logger.info(f" - {f['video']}: {f['reason']}")
 
+    return 1 if failed_ops else 0
+
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
