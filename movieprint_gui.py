@@ -1849,16 +1849,16 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     self.queue.put(("log", "Generating HDR Preview (FFmpeg)..."))
                     interval = duration / total_frames
                     success, meta = DependencyManager.video_processing.extract_frames(
-                        video_path, temp_dir, logger, 
-                        interval_seconds=interval, 
-                        fast_preview=True, 
-                        hdr_tonemap=True, 
+                        video_path, temp_dir, logger,
+                        interval_seconds=interval,
+                        fast_preview=False,
+                        hdr_tonemap=True,
                         hdr_algorithm=config['hdr_algorithm']
                     )
                     if len(meta) > total_frames: meta = meta[:total_frames]
                 else:
                     success, meta = DependencyManager.video_processing.extract_frames_from_timestamps(
-                        video_path, timestamps, temp_dir, logger, fast_preview=True
+                        video_path, timestamps, temp_dir, logger, fast_preview=False
                     )
             
             if config['cancel_event'].is_set():
