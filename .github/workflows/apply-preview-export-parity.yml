@@ -6,6 +6,7 @@ on:
       - agent/fix-preview-export-parity
     paths:
       - .github/apply_preview_export_parity.py
+      - .github/prepare_preview_export_patch.py
       - .github/workflows/apply-preview-export-parity.yml
 
 permissions:
@@ -22,6 +23,8 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
+      - name: Prepare targeted patch
+        run: python .github/prepare_preview_export_patch.py
       - name: Apply targeted patch
         run: |
           if ! python .github/apply_preview_export_parity.py > .github/patch_error.txt 2>&1; then
@@ -38,7 +41,7 @@ jobs:
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
       - name: Remove one-shot patch tooling
-        run: rm .github/apply_preview_export_parity.py .github/workflows/apply-preview-export-parity.yml
+        run: rm .github/apply_preview_export_parity.py .github/prepare_preview_export_patch.py .github/workflows/apply-preview-export-parity.yml
       - name: Compile
         run: python -m compileall -q . -x 'tmp|\.git|\.venv'
       - name: Test
