@@ -2,7 +2,7 @@ import customtkinter as ctk
 import tkinter as tk
 import logging
 from logging.handlers import RotatingFileHandler
-from tkinter import ttk, filedialog, messagebox, colorchooser
+from tkinter import ttk, filedialog, messagebox, colorchooser, simpledialog
 import os
 import sys
 import shutil
@@ -16,6 +16,7 @@ import traceback
 import numpy as np
 from typing import Optional, List, Dict, Any, Tuple, Union
 from PIL import ImageTk, Image, ImageDraw, ImageChops, ImageOps
+import project_io
 
 # --- DEPENDENCY MANAGEMENT ---
 class DependencyManager:
@@ -237,6 +238,7 @@ class ScrubbingHandler:
             self._stop_event.set()
             self._scrub_queue.put(None) 
             self.app.queue.put(("log", "Scrubbing finished."))
+            self.app.after(0, self.app.quick_refresh_layout)
 
     def handle_motion(self, event):
         if not self.active: return
@@ -316,6 +318,7 @@ class ZoomableCanvas(ctk.CTkFrame):
         self.canvas.bind("<MouseWheel>", self.on_mouse_wheel) 
         self.canvas.bind("<Button-4>", self.on_mouse_wheel)   
         self.canvas.bind("<Button-5>", self.on_mouse_wheel)   
+        self.canvas.bind("<Button-3>", self.app_ref.show_thumbnail_menu)
         
         if DND_ENABLED:
             try:
@@ -409,6 +412,105 @@ class ZoomableCanvas(ctk.CTkFrame):
         self.photo_image = None
         self.canvas.configure(scrollregion=(0,0,0,0))
 
+
+class VideoPlayerWindow(ctk.CTkToplevel):
+    """Small OpenCV-backed player/editor that stays inside the Tk architecture."""
+
+    def __init__(self, app_ref: 'MoviePrintApp', video_path: str):
+        super().__init__(app_ref)
+        self.app_ref = app_ref
+        self.video_path = video_path
+        self.title(f"Player - {os.path.basename(video_path)}")
+        self.geometry("960x650")
+        self.configure(fg_color=Theme.BG_PRIMARY)
+        self.cap = DependencyManager.video_processing.cv2.VideoCapture(video_path)
+        if not self.cap.isOpened():
+            self.destroy()
+            raise ValueError("The selected video could not be opened.")
+        cv2 = DependencyManager.video_processing.cv2
+        self.fps = float(self.cap.get(cv2.CAP_PROP_FPS) or 25.0)
+        self.frame_count = int(self.cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+        self.duration = self.frame_count / self.fps if self.fps > 0 else 0.0
+        self.current_timestamp = 0.0
+        self.playing = False
+        self._photo = None
+
+        self.grid_columnconfigure(0, weight=1)
+        self.grid_rowconfigure(0, weight=1)
+        self.video_label = ctk.CTkLabel(self, text="", fg_color="#000000")
+        self.video_label.grid(row=0, column=0, sticky="nsew", padx=12, pady=(12, 6))
+
+        self.position_var = tk.DoubleVar(value=0.0)
+        self.position_slider = ctk.CTkSlider(
+            self, from_=0, to=max(self.duration, 0.001), variable=self.position_var,
+            command=self._seek, progress_color=Theme.ACCENT_BLUE,
+        )
+        self.position_slider.grid(row=1, column=0, sticky="ew", padx=12)
+
+        controls = ctk.CTkFrame(self, fg_color="transparent")
+        controls.grid(row=2, column=0, pady=(6, 12))
+        self.play_button = ctk.CTkButton(controls, text="PLAY", width=90, command=self.toggle_play)
+        self.play_button.pack(side="left", padx=4)
+        ctk.CTkButton(controls, text="-1s", width=60, command=lambda: self.seek_to(self.current_timestamp - 1)).pack(side="left", padx=4)
+        ctk.CTkButton(controls, text="+1s", width=60, command=lambda: self.seek_to(self.current_timestamp + 1)).pack(side="left", padx=4)
+        ctk.CTkButton(controls, text="USE FOR SELECTED", width=150, command=self._replace_selected).pack(side="left", padx=4)
+        self.time_label = ctk.CTkLabel(controls, text="00:00.000", text_color=Theme.TEXT_MUTED)
+        self.time_label.pack(side="left", padx=12)
+
+        self.protocol("WM_DELETE_WINDOW", self.close)
+        self.seek_to(0.0)
+
+    def _seek(self, value):
+        self.seek_to(float(value))
+
+    def seek_to(self, timestamp: float):
+        cv2 = DependencyManager.video_processing.cv2
+        self.current_timestamp = max(0.0, min(float(timestamp), self.duration))
+        self.position_var.set(self.current_timestamp)
+        self.cap.set(cv2.CAP_PROP_POS_MSEC, self.current_timestamp * 1000.0)
+        ok, frame = self.cap.read()
+        if not ok:
+            return
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+        image = Image.fromarray(frame)
+        max_w = max(320, self.winfo_width() - 40)
+        max_h = max(200, self.winfo_height() - 150)
+        image.thumbnail((max_w, max_h), Image.Resampling.LANCZOS)
+        self._photo = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
+        self.video_label.configure(image=self._photo)
+        minutes, seconds = divmod(self.current_timestamp, 60)
+        hours, minutes = divmod(int(minutes), 60)
+        prefix = f"{hours:02d}:" if hours else ""
+        self.time_label.configure(text=f"{prefix}{minutes:02d}:{seconds:06.3f}")
+
+    def toggle_play(self):
+        self.playing = not self.playing
+        self.play_button.configure(text="PAUSE" if self.playing else "PLAY")
+        if self.playing:
+            self._tick()
+
+    def _tick(self):
+        if not self.playing or not self.winfo_exists():
+            return
+        next_timestamp = self.current_timestamp + max(1.0 / max(self.fps, 1.0), 0.033)
+        if next_timestamp >= self.duration:
+            self.playing = False
+            self.play_button.configure(text="PLAY")
+            return
+        self.seek_to(next_timestamp)
+        self.after(max(15, round(1000 / max(self.fps, 1.0))), self._tick)
+
+    def _replace_selected(self):
+        self.app_ref.replace_selected_thumbnail(self.current_timestamp)
+
+    def close(self):
+        self.playing = False
+        if self.cap:
+            self.cap.release()
+        if self.app_ref.player_window is self:
+            self.app_ref.player_window = None
+        self.destroy()
+
 class CTkCollapsibleFrame(ctk.CTkFrame):
     def __init__(self, master, title="", start_open=True, **kwargs):
         super().__init__(master, **kwargs)
@@ -468,6 +570,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.active_job_kind = None
         self._applying_theme = False
         self._loading_persistent_settings = False
+        self.current_project_path: Optional[str] = None
+        self.selected_thumbnail_index: Optional[int] = None
+        self.player_window: Optional[VideoPlayerWindow] = None
         
         self.state_manager = DependencyManager.state_manager_cls()
         self._init_variables_dynamic()
@@ -569,12 +674,54 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._create_landing_page(self.landing_frame)
 
     def _build_toolbar(self):
-        self.toolbar_frame = ctk.CTkFrame(self, height=30, fg_color=Theme.BG_PRIMARY)
-        self.toolbar_frame.grid(row=1, column=1, sticky="ew", padx=10)
-        ctk.CTkLabel(self.toolbar_frame, text="Zoom:", text_color=Theme.TEXT_MUTED).pack(side="left", padx=5)
-        self.zoom_slider = ctk.CTkSlider(self.toolbar_frame, from_=0.1, to=5.0, variable=self.zoom_level_var, 
+        self.toolbar_frame = ctk.CTkFrame(self, fg_color=Theme.BG_PRIMARY)
+        self.toolbar_frame.grid(row=1, column=1, sticky="ew", padx=10, pady=(4, 2))
+        project_row = ctk.CTkFrame(self.toolbar_frame, fg_color="transparent")
+        project_row.pack(fill="x")
+        for label, command in (
+            ("OPEN PROJECT", self.open_project_action),
+            ("SAVE PROJECT", self.save_project_action),
+            ("PLAYER", self.open_player),
+        ):
+            ctk.CTkButton(
+                project_row, text=label, command=command, height=26,
+                fg_color=Theme.BUTTON_SUBTLE, hover_color=Theme.BUTTON_SUBTLE_HOVER,
+            ).pack(side="left", padx=(0, 5))
+
+        ctk.CTkLabel(project_row, text="Sheet:", text_color=Theme.TEXT_MUTED).pack(side="left", padx=(8, 3))
+        self.sheet_display_var = tk.StringVar(value="Sheet 1")
+        self.sheet_combo = ctk.CTkComboBox(
+            project_row, width=150, variable=self.sheet_display_var,
+            values=["Sheet 1"], command=self._on_sheet_selected,
+        )
+        self.sheet_combo.pack(side="left", padx=3)
+        ctk.CTkButton(project_row, text="+", width=30, height=26, command=self.add_sheet).pack(side="left", padx=2)
+        ctk.CTkButton(project_row, text="DUP", width=44, height=26, command=self.duplicate_sheet).pack(side="left", padx=2)
+        ctk.CTkButton(project_row, text="-", width=30, height=26, command=self.delete_sheet).pack(side="left", padx=2)
+
+        ctk.CTkLabel(project_row, text="Sort:", text_color=Theme.TEXT_MUTED).pack(side="left", padx=(12, 3))
+        self.sort_combo = ctk.CTkComboBox(
+            project_row, width=125, values=["timestamp", "timestamp_desc", "frame", "duration", "faces", "manual"],
+            variable=self.sort_mode_var, command=lambda _value: self.quick_refresh_layout(),
+        )
+        self.sort_combo.pack(side="left", padx=3)
+        self.hidden_switch = ctk.CTkSwitch(
+            project_row, text="Show hidden", command=self._toggle_hidden_filter,
+            progress_color=Theme.ACCENT_GREEN,
+        )
+        self.hidden_switch.pack(side="left", padx=8)
+
+        zoom_row = ctk.CTkFrame(self.toolbar_frame, fg_color="transparent")
+        zoom_row.pack(fill="x", pady=(3, 0))
+        ctk.CTkLabel(zoom_row, text="Zoom:", text_color=Theme.TEXT_MUTED).pack(side="left", padx=5)
+        self.zoom_slider = ctk.CTkSlider(zoom_row, from_=0.1, to=5.0, variable=self.zoom_level_var,
                                         command=self.preview_zoomable_canvas.set_zoom, width=150, progress_color=Theme.ACCENT_BLUE)
         self.zoom_slider.pack(side="left", padx=5)
+        ctk.CTkLabel(
+            zoom_row, text="Right-click a thumbnail to edit it; drag horizontally to scrub.",
+            text_color=Theme.TEXT_MUTED,
+        ).pack(side="left", padx=12)
+        self._refresh_sheet_controls()
 
     def _build_action_footer(self):
         self.action_frame = ctk.CTkFrame(self, height=60, fg_color=Theme.BG_SECONDARY)
@@ -909,6 +1056,26 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                                                  selected_color=Theme.ACCENT_BLUE, selected_hover_color=Theme.ACCENT_BLUE_HOVER,
                                                  command=self.quick_refresh_layout)
         self.rotate_seg.pack(fill="x", pady=5)
+
+        ctk.CTkLabel(parent, text="Thumbnail Aspect:").pack(anchor="w", pady=(8, 0))
+        self.aspect_combo = ctk.CTkComboBox(
+            parent, values=["source", "16:9", "4:3", "1:1", "9:16"],
+            variable=self.thumbnail_aspect_ratio_var,
+            command=lambda _value: self.quick_refresh_layout(),
+        )
+        self.aspect_combo.pack(fill="x", pady=(0, 5))
+
+        ctk.CTkLabel(parent, text="Crop video edges (%):").pack(anchor="w", pady=(8, 0))
+        crop_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        crop_frame.pack(fill="x", pady=(0, 5))
+        for label, variable in (
+            ("T", self.crop_top_var), ("R", self.crop_right_var),
+            ("B", self.crop_bottom_var), ("L", self.crop_left_var),
+        ):
+            ctk.CTkLabel(crop_frame, text=label).pack(side="left", padx=(3, 1))
+            entry = ctk.CTkEntry(crop_frame, textvariable=variable, width=48)
+            entry.pack(side="left", padx=(0, 3))
+            entry.bind("<Return>", lambda _event: self.quick_refresh_layout())
         
         ctk.CTkLabel(parent, text="Corner Roundness:").pack(anchor="w", pady=(10,0))
         ctk.CTkSlider(parent, from_=0, to=100, variable=self.rounded_corners_var, progress_color=Theme.ACCENT_GREEN, command=self.quick_refresh_layout).pack(fill="x", pady=5)
@@ -917,6 +1084,11 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         pad_entry = ctk.CTkEntry(parent, textvariable=self.padding_var)
         pad_entry.pack(fill="x", pady=5)
         pad_entry.bind("<Return>", lambda e: self.quick_refresh_layout()) 
+
+        ctk.CTkLabel(parent, text="Outer Grid Margin:").pack(anchor="w", pady=(6, 0))
+        margin_entry = ctk.CTkEntry(parent, textvariable=self.grid_margin_var)
+        margin_entry.pack(fill="x", pady=5)
+        margin_entry.bind("<Return>", lambda _event: self.quick_refresh_layout())
 
         ctk.CTkLabel(parent, text="Background Color:").pack(anchor="w", pady=(10,0))
         ctk.CTkEntry(parent, textvariable=self.background_color_var).pack(fill="x", pady=5)
@@ -1027,6 +1199,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         try:
             var = getattr(self, var_name)
             val = var.get()
+            if setting_key == 'input_paths' and isinstance(val, str):
+                val = [path.strip() for path in val.split(';') if path.strip()]
             self.state_manager.update_settings({setting_key: val}, commit=False)
         except Exception: pass
 
@@ -1095,6 +1269,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self._toggle_hdr_options()
         if state.thumbnail_metadata and self.preview_temp_dir:
             self._restore_grid_visuals(state, settings)
+        self._refresh_sheet_controls()
+        if hasattr(self, 'hidden_switch'):
+            if settings.filter_mode == 'all': self.hidden_switch.select()
+            else: self.hidden_switch.deselect()
         self._update_live_math()
 
     def _restore_grid_visuals(self, state, settings):
@@ -1124,6 +1302,13 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             'output_width': settings.output_width,
             'output_height': settings.output_height,
             'quality': settings.preview_quality,
+            'crop_top': settings.crop_top,
+            'crop_right': settings.crop_right,
+            'crop_bottom': settings.crop_bottom,
+            'crop_left': settings.crop_left,
+            'thumbnail_aspect_ratio': settings.thumbnail_aspect_ratio,
+            'sort_mode': settings.sort_mode,
+            'filter_mode': settings.filter_mode,
         }
 
         success, layout = DependencyManager.image_grid.create_image_grid(**grid_params)
@@ -1134,18 +1319,359 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _preview_image_source_data(self, metadata, layout_mode):
         image_source_data = []
-        for item in metadata or []:
+        for source_index, item in enumerate(metadata or []):
             entry = {
                 'image_path': item.get('frame_path'),
                 'timestamp_sec': item.get('timestamp_sec'),
                 'frame_number': item.get('frame_number'),
                 'video_filename': item.get('video_filename'),
                 'video_path': item.get('video_path'),
+                'id': item.get('id') or f'thumb-{source_index + 1}',
+                'source_index': source_index,
+                'hidden': bool(item.get('hidden')),
+                'transform': item.get('transform', {}),
+                'face_detection': item.get('face_detection'),
             }
             if layout_mode == 'timeline':
                 entry['width_ratio'] = item.get('duration_frames', 1.0)
             image_source_data.append(entry)
         return image_source_data
+
+    def _grid_transform_params(self):
+        return {
+            'crop_top': float(self.crop_top_var.get() or 0),
+            'crop_right': float(self.crop_right_var.get() or 0),
+            'crop_bottom': float(self.crop_bottom_var.get() or 0),
+            'crop_left': float(self.crop_left_var.get() or 0),
+            'thumbnail_aspect_ratio': self.thumbnail_aspect_ratio_var.get(),
+            'sort_mode': self.sort_mode_var.get(),
+            'filter_mode': self.filter_mode_var.get(),
+        }
+
+    # --- PROJECT WORKSPACE ---
+    def _refresh_sheet_controls(self):
+        if not hasattr(self, 'sheet_combo'):
+            return
+        state = self.state_manager.get_state()
+        names = [sheet.name for sheet in state.sheets]
+        self.sheet_combo.configure(values=names)
+        self.sheet_display_var.set(state.active_sheet().name)
+
+    def _on_sheet_selected(self, sheet_name):
+        state = self.state_manager.get_state()
+        target = next((sheet for sheet in state.sheets if sheet.name == sheet_name), None)
+        if not target or target.id == state.active_sheet_id:
+            return
+        self.state_manager.switch_sheet(target.id)
+        self.selected_thumbnail_index = None
+        self.refresh_ui_from_state(self.state_manager.get_state())
+        self.quick_refresh_layout()
+
+    def add_sheet(self):
+        self.state_manager.add_sheet()
+        self.selected_thumbnail_index = None
+        self._refresh_sheet_controls()
+        self.preview_zoomable_canvas.clear()
+        self.status_lbl.configure(text="New sheet ready. Click Preview to populate it.")
+
+    def duplicate_sheet(self):
+        self.state_manager.add_sheet(duplicate_active=True)
+        self._refresh_sheet_controls()
+        self.quick_refresh_layout()
+
+    def delete_sheet(self):
+        if not self.state_manager.remove_active_sheet():
+            messagebox.showinfo("Sheets", "A project must keep at least one sheet.")
+            return
+        self.selected_thumbnail_index = None
+        self._refresh_sheet_controls()
+        self.quick_refresh_layout()
+
+    def _toggle_hidden_filter(self):
+        self.filter_mode_var.set("all" if self.hidden_switch.get() else "visible")
+        self.quick_refresh_layout()
+
+    def save_project_action(self):
+        state = self.state_manager.get_state()
+        state.source_paths = list(self._internal_input_paths or state.settings.input_paths)
+        state.settings.input_paths = list(state.source_paths)
+        path = self.current_project_path
+        if not path:
+            path = filedialog.asksaveasfilename(
+                title="Save PyMoviePrint Project",
+                initialfile=f"{state.project_name}.pymovieprint.json",
+                defaultextension=".pymovieprint.json",
+                filetypes=[("PyMoviePrint Project", "*.pymovieprint.json"), ("JSON", "*.json")],
+            )
+        if not path:
+            return
+        try:
+            self.current_project_path = project_io.save_project_json(path, state)
+            state.project_name = os.path.splitext(os.path.basename(self.current_project_path))[0]
+            self.status_lbl.configure(text=f"Project saved: {os.path.basename(self.current_project_path)}")
+        except (OSError, ValueError, TypeError) as error:
+            messagebox.showerror("Project Save Error", str(error))
+
+    def open_project_action(self):
+        path = filedialog.askopenfilename(
+            title="Open MoviePrint Project",
+            filetypes=[
+                ("Editable MoviePrint", "*.json *.png"),
+                ("PyMoviePrint Project", "*.json"),
+                ("MoviePrint PNG", "*.png"),
+            ],
+        )
+        if not path:
+            return
+        try:
+            state, source_kind = project_io.load_project(path)
+            self._prepare_loaded_project_frames(state)
+            self.state_manager.replace_state(state)
+            self.current_project_path = path if path.lower().endswith(".json") else None
+            self._internal_input_paths = list(state.source_paths or state.settings.input_paths)
+            state.settings.input_paths = list(self._internal_input_paths)
+            self.input_paths_var.set("; ".join(self._internal_input_paths))
+            self.refresh_ui_from_state(state)
+            self._refresh_sheet_controls()
+            if state.thumbnail_metadata:
+                if self.is_landing_state:
+                    self.landing_frame.grid_remove()
+                    self.preview_zoomable_canvas.grid(row=0, column=0, sticky="nsew")
+                    self.is_landing_state = False
+                self.quick_refresh_layout()
+            self.status_lbl.configure(text=f"Opened {source_kind}: {os.path.basename(path)}")
+        except (OSError, ValueError, json.JSONDecodeError) as error:
+            messagebox.showerror("Project Open Error", str(error))
+
+    def _prepare_loaded_project_frames(self, state):
+        """Re-extract referenced frames so projects remain portable across machines."""
+        missing = any(
+            not item.get('frame_path') or not os.path.exists(item.get('frame_path', ''))
+            for sheet in state.sheets for item in sheet.thumbnail_metadata
+        )
+        if not missing:
+            return
+        sources = state.source_paths or state.settings.input_paths
+        if not sources or not os.path.exists(sources[0]):
+            replacement = filedialog.askopenfilename(
+                title="Locate the source video for this project",
+                filetypes=[("Video files", "*.mp4 *.mov *.mkv *.avi *.wmv *.flv"), ("All files", "*.*")],
+            )
+            if not replacement:
+                raise ValueError("The source video referenced by this project could not be found.")
+            sources = [os.path.abspath(replacement)]
+            state.source_paths = list(sources)
+            state.settings.input_paths = list(sources)
+        if self.preview_temp_dir and os.path.exists(self.preview_temp_dir):
+            self.temp_dirs_to_cleanup.append(self.preview_temp_dir)
+        self.preview_temp_dir = tempfile.mkdtemp(prefix="movieprint_project_")
+        video_path = sources[0]
+        cv2 = DependencyManager.video_processing.cv2
+        cap = cv2.VideoCapture(video_path)
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0) if cap.isOpened() else 25.0
+        video_width = float(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1.0) if cap.isOpened() else 1.0
+        video_height = float(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1.0) if cap.isOpened() else 1.0
+        if cap.isOpened():
+            cap.release()
+        if getattr(state.settings, 'crop_units', 'percent') == 'pixels':
+            state.settings.crop_top = state.settings.crop_top * 100.0 / video_height
+            state.settings.crop_bottom = state.settings.crop_bottom * 100.0 / video_height
+            state.settings.crop_left = state.settings.crop_left * 100.0 / video_width
+            state.settings.crop_right = state.settings.crop_right * 100.0 / video_width
+            state.settings.crop_units = 'percent'
+        for sheet_index, sheet in enumerate(state.sheets):
+            sheet_dir = os.path.join(self.preview_temp_dir, f"sheet_{sheet_index + 1}")
+            os.makedirs(sheet_dir, exist_ok=True)
+            with DependencyManager.video_processing.VideoExtractor(video_path, logging.getLogger("project_open")) as extractor:
+                for item_index, item in enumerate(sheet.thumbnail_metadata):
+                    if item.get('frame_path') and os.path.exists(item['frame_path']):
+                        continue
+                    timestamp = item.get('timestamp_sec')
+                    if timestamp is None and item.get('frame_number') is not None:
+                        timestamp = float(item['frame_number']) / max(fps, 0.001)
+                    timestamp = float(timestamp or 0.0)
+                    frame = extractor.extract_single_frame(timestamp)
+                    if frame is None:
+                        continue
+                    frame_path = os.path.join(sheet_dir, f"frame_{item_index + 1:05d}.jpg")
+                    cv2.imwrite(frame_path, frame)
+                    item['frame_path'] = frame_path
+                    item['timestamp_sec'] = timestamp
+                    item['video_path'] = video_path
+                    item['video_filename'] = os.path.basename(video_path)
+                    item['needs_extraction'] = False
+        state.activate_sheet(state.active_sheet_id, save_current=False)
+
+    # --- THUMBNAIL EDITING ---
+    def _thumbnail_index_at_event(self, event) -> Optional[int]:
+        layout = self.state_manager.get_state().thumbnail_layout_data
+        if not layout or not self.preview_zoomable_canvas.original_image:
+            return None
+        canvas_x, canvas_y = self.preview_zoomable_canvas.canvas_event_to_image_coords(event)
+        for display_index, thumb in enumerate(layout):
+            if (thumb['x'] <= canvas_x <= thumb['x'] + thumb['width'] and
+                    thumb['y'] <= canvas_y <= thumb['y'] + thumb['height']):
+                return int(thumb.get('source_index', display_index))
+        return None
+
+    def show_thumbnail_menu(self, event):
+        index = self._thumbnail_index_at_event(event)
+        if index is None:
+            return
+        self.selected_thumbnail_index = index
+        sheet = self.state_manager.get_state().active_sheet()
+        sheet.selected_thumbnail_id = self.state_manager.get_state().thumbnail_metadata[index].get('id')
+        menu = tk.Menu(self, tearoff=0)
+        hidden = bool(self.state_manager.get_state().thumbnail_metadata[index].get('hidden'))
+        menu.add_command(label="Show thumbnail" if hidden else "Hide thumbnail", command=self.toggle_selected_hidden)
+        menu.add_separator()
+        menu.add_command(label="Add frame before", command=lambda: self.add_thumbnail_relative(-1))
+        menu.add_command(label="Add frame after", command=lambda: self.add_thumbnail_relative(1))
+        menu.add_command(label="Replace at time...", command=self._replace_selected_prompt)
+        menu.add_command(label="Save frame...", command=self.save_selected_frame)
+        menu.add_separator()
+        menu.add_command(label="Set IN", command=lambda: self.set_selected_boundary('in'))
+        menu.add_command(label="Set OUT", command=lambda: self.set_selected_boundary('out'))
+        menu.add_command(label="Expand", command=self.expand_selected_thumbnail)
+        menu.tk_popup(event.x_root, event.y_root)
+
+    def _selected_meta(self):
+        metadata = self.state_manager.get_state().thumbnail_metadata
+        if self.selected_thumbnail_index is None or not (0 <= self.selected_thumbnail_index < len(metadata)):
+            return None
+        return metadata[self.selected_thumbnail_index]
+
+    def toggle_selected_hidden(self):
+        item = self._selected_meta()
+        if item is None:
+            return
+        self.state_manager.snapshot()
+        item['hidden'] = not bool(item.get('hidden'))
+        self.quick_refresh_layout()
+
+    def _source_video_path(self) -> str:
+        item = self._selected_meta() or {}
+        candidates = [item.get('video_path')] + self._internal_input_paths + self.state_manager.get_state().source_paths
+        return next((path for path in candidates if path and os.path.exists(path)), "")
+
+    def _extract_frame_metadata(self, timestamp: float, identity: Optional[str] = None):
+        video_path = self._source_video_path()
+        if not video_path:
+            raise ValueError("The source video is not available.")
+        if not self.preview_temp_dir:
+            self.preview_temp_dir = tempfile.mkdtemp(prefix="movieprint_preview_")
+        with DependencyManager.video_processing.VideoExtractor(video_path, logging.getLogger("thumbnail_edit")) as extractor:
+            frame = extractor.extract_single_frame(max(0.0, timestamp))
+        if frame is None:
+            raise ValueError("Could not extract that frame from the video.")
+        identity = identity or f"thumb-{time.time_ns()}"
+        frame_path = os.path.join(self.preview_temp_dir, f"edited_{identity}_{time.time_ns()}.jpg")
+        DependencyManager.video_processing.cv2.imwrite(frame_path, frame)
+        cap = DependencyManager.video_processing.cv2.VideoCapture(video_path)
+        fps = float(cap.get(DependencyManager.video_processing.cv2.CAP_PROP_FPS) or 25.0) if cap.isOpened() else 25.0
+        if cap.isOpened():
+            cap.release()
+        return {
+            'id': identity, 'frame_path': frame_path, 'timestamp_sec': max(0.0, timestamp),
+            'frame_number': round(max(0.0, timestamp) * fps),
+            'video_path': video_path, 'video_filename': os.path.basename(video_path),
+        }
+
+    def add_thumbnail_relative(self, direction: int):
+        current = self._selected_meta()
+        if current is None:
+            return
+        metadata = self.state_manager.get_state().thumbnail_metadata
+        index = self.selected_thumbnail_index
+        current_ts = float(current.get('timestamp_sec') or 0.0)
+        neighbour_index = index + direction
+        if 0 <= neighbour_index < len(metadata):
+            neighbour_ts = float(metadata[neighbour_index].get('timestamp_sec') or current_ts)
+            timestamp = (current_ts + neighbour_ts) / 2.0
+        else:
+            timestamp = max(0.0, current_ts + direction)
+        try:
+            self.state_manager.snapshot()
+            insert_at = index if direction < 0 else index + 1
+            metadata.insert(insert_at, self._extract_frame_metadata(timestamp))
+            self.selected_thumbnail_index = insert_at
+            self.sort_mode_var.set("manual")
+            self.quick_refresh_layout()
+        except ValueError as error:
+            messagebox.showerror("Thumbnail Edit", str(error))
+
+    def _replace_selected_prompt(self):
+        item = self._selected_meta()
+        if item is None:
+            return
+        timestamp = simpledialog.askfloat(
+            "Replace Thumbnail", "Time in seconds:", initialvalue=float(item.get('timestamp_sec') or 0.0), minvalue=0.0,
+        )
+        if timestamp is not None:
+            self.replace_selected_thumbnail(timestamp)
+
+    def replace_selected_thumbnail(self, timestamp: float):
+        item = self._selected_meta()
+        if item is None:
+            messagebox.showinfo("Player", "Right-click a thumbnail first to select it.")
+            return
+        try:
+            self.state_manager.snapshot()
+            replacement = self._extract_frame_metadata(timestamp, item.get('id'))
+            replacement.update({key: value for key, value in item.items() if key in {'hidden', 'transform'}})
+            self.state_manager.get_state().thumbnail_metadata[self.selected_thumbnail_index] = replacement
+            self.quick_refresh_layout()
+        except ValueError as error:
+            messagebox.showerror("Thumbnail Edit", str(error))
+
+    def save_selected_frame(self):
+        item = self._selected_meta()
+        if not item or not os.path.exists(item.get('frame_path', '')):
+            return
+        extension = os.path.splitext(item['frame_path'])[1] or '.jpg'
+        path = filedialog.asksaveasfilename(defaultextension=extension, filetypes=[("Image", "*.jpg *.png")])
+        if path:
+            shutil.copy2(item['frame_path'], path)
+
+    def set_selected_boundary(self, boundary: str):
+        item = self._selected_meta()
+        if item is None:
+            return
+        timestamp = float(item.get('timestamp_sec') or 0.0)
+        sheet = self.state_manager.get_state().active_sheet()
+        self.state_manager.snapshot()
+        if boundary == 'in':
+            sheet.in_point_sec = timestamp
+        else:
+            sheet.out_point_sec = timestamp
+        self.status_lbl.configure(text=f"{boundary.upper()} set to {timestamp:.3f}s")
+
+    def expand_selected_thumbnail(self):
+        item = self._selected_meta()
+        if not item or not os.path.exists(item.get('frame_path', '')):
+            return
+        window = ctk.CTkToplevel(self)
+        window.title(f"Frame at {float(item.get('timestamp_sec') or 0):.3f}s")
+        with Image.open(item['frame_path']) as source:
+            image = source.copy()
+        image.thumbnail((1280, 800), Image.Resampling.LANCZOS)
+        photo = ctk.CTkImage(light_image=image, dark_image=image, size=image.size)
+        label = ctk.CTkLabel(window, text="", image=photo)
+        label.image = photo
+        label.pack(padx=10, pady=10)
+
+    def open_player(self):
+        video_path = self._source_video_path()
+        if not video_path:
+            messagebox.showerror("Player", "Choose a source video first.")
+            return
+        if self.player_window and self.player_window.winfo_exists():
+            self.player_window.focus()
+            return
+        try:
+            self.player_window = VideoPlayerWindow(self, video_path)
+        except ValueError as error:
+            messagebox.showerror("Player", str(error))
 
     # --- ACTION HANDLERS ---
     def _start_queue_poller(self):
@@ -1192,6 +1718,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             messagebox.showerror("Preview Error", "Choose a video file before generating a preview.")
             return
         self._internal_input_paths = input_paths
+        self.state_manager.get_state().source_paths = list(input_paths)
         
         # --- NEW: Check if input is directory and resolve to first video ---
         preview_target_path = self._internal_input_paths[0]
@@ -1224,6 +1751,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             'rotate_thumbnails': int(self.rotate_thumbnails_var.get()),
             'bg_color': self.background_color_var.get(),
             'padding': int(self.padding_var.get()),
+            'grid_margin': int(self.grid_margin_var.get()),
             'rounded': int(self.rounded_corners_var.get()),
             'show_header': self.show_header_var.get(),
             'show_file_path': self.show_file_path_var.get(),
@@ -1237,6 +1765,13 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             'fit_to_output_params': self.fit_to_output_params_var.get(),
             'output_width': int(self.output_width_var.get()),
             'output_height': int(self.output_height_var.get()),
+            'crop_top': float(self.crop_top_var.get() or 0),
+            'crop_right': float(self.crop_right_var.get() or 0),
+            'crop_bottom': float(self.crop_bottom_var.get() or 0),
+            'crop_left': float(self.crop_left_var.get() or 0),
+            'thumbnail_aspect_ratio': self.thumbnail_aspect_ratio_var.get(),
+            'sort_mode': self.sort_mode_var.get(),
+            'filter_mode': self.filter_mode_var.get(),
             'cancel_event': threading.Event(),
         }
 
@@ -1322,6 +1857,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     target_row_height=config['target_row_height'],
                     background_color_hex=config['bg_color'],
                     padding=config['padding'],
+                    grid_margin=config['grid_margin'],
                     logger=logger,
                     rounded_corners=config['rounded'], 
                     rotation=config['rotate_thumbnails'],
@@ -1333,7 +1869,14 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     quality=config['preview_quality'],
                     fit_to_output_params=config['fit_to_output_params'],
                     output_width=config['output_width'],
-                    output_height=config['output_height']
+                    output_height=config['output_height'],
+                    crop_top=config['crop_top'],
+                    crop_right=config['crop_right'],
+                    crop_bottom=config['crop_bottom'],
+                    crop_left=config['crop_left'],
+                    thumbnail_aspect_ratio=config['thumbnail_aspect_ratio'],
+                    sort_mode=config['sort_mode'],
+                    filter_mode=config['filter_mode'],
                 )
                 
                 if config['cancel_event'].is_set():
@@ -1376,8 +1919,13 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     except Exception as e: logger.warning(f"Face detect error: {e}")
 
     def _handle_preview_done(self, data):
-        self.state_manager.get_state().thumbnail_metadata = data.get("meta")
+        metadata = data.get("meta") or []
+        for index, item in enumerate(metadata):
+            item.setdefault('id', f"thumb-{time.time_ns()}-{index + 1}")
+            item.setdefault('hidden', False)
+        self.state_manager.get_state().thumbnail_metadata = metadata
         self.state_manager.get_state().thumbnail_layout_data = data.get("layout")
+        self.state_manager.get_state().sync_active_sheet()
         
         if self.is_landing_state:
             self.landing_frame.grid_remove()
@@ -1408,6 +1956,16 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         success_count = len(successful_ops)
         failure_count = len(failed_ops)
         cancelled = bool(data.get("cancelled"))
+
+        # PNG exports carry a compressed, editable project payload. Failure to
+        # embed metadata never invalidates an otherwise successful render.
+        for operation in successful_ops:
+            output_path = operation.get('output') if isinstance(operation, dict) else None
+            if output_path and str(output_path).lower().endswith('.png') and os.path.isfile(output_path):
+                try:
+                    project_io.embed_project_in_png(output_path, self.state_manager.get_state())
+                except (OSError, ValueError, TypeError) as error:
+                    logging.getLogger("project_embed").warning("Could not embed project in %s: %s", output_path, error)
 
         if success_count == 0 and failure_count == 0 and not cancelled:
             summary = "No valid video files were found. Nothing was generated."
@@ -1446,6 +2004,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         layout_mode = self.layout_mode_var.get()
         image_source_data = self._preview_image_source_data(meta, layout_mode)
         grid_path = os.path.join(self.preview_temp_dir, "preview_refresh.jpg")
+        transform_params = self._grid_transform_params()
         success, layout = DependencyManager.image_grid.create_image_grid(
             image_source_data=image_source_data,
             output_path=grid_path,
@@ -1455,6 +2014,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             target_row_height=int(self.target_row_height_var.get() or 150),
             background_color_hex=self.background_color_var.get(),
             padding=int(self.padding_var.get()),
+            grid_margin=int(self.grid_margin_var.get()),
             logger=logging.getLogger("refresh"),
             rounded_corners=int(self.rounded_corners_var.get()),
             rotation=int(self.rotate_thumbnails_var.get()),
@@ -1466,7 +2026,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             quality=int(self.preview_quality_var.get()),
             fit_to_output_params=self.fit_to_output_params_var.get(),
             output_width=int(self.output_width_var.get()),
-            output_height=int(self.output_height_var.get())
+            output_height=int(self.output_height_var.get()),
+            **transform_params,
         )
         if success:
             self.preview_zoomable_canvas.set_image(grid_path)
@@ -1483,21 +2044,34 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             if thumb_info['x'] <= canvas_x <= thumb_info['x'] + thumb_info['width'] and \
                thumb_info['y'] <= canvas_y <= thumb_info['y'] + thumb_info['height']:
                 self.state_manager.snapshot()
-                meta = self.state_manager.get_state().thumbnail_metadata[i]
+                source_index = int(thumb_info.get('source_index', i))
+                self.selected_thumbnail_index = source_index
+                meta = self.state_manager.get_state().thumbnail_metadata[source_index]
                 video_path = self._internal_input_paths[0] if self._internal_input_paths else ""
-                self.scrubbing_handler.start(event, i, meta.get('timestamp_sec', 0.0), video_path)
+                self.scrubbing_handler.start(event, source_index, meta.get('timestamp_sec', 0.0), video_path)
                 return True
         return False
     def handle_scrubbing(self, event): self.scrubbing_handler.handle_motion(event)
     def stop_scrubbing(self, event): self.scrubbing_handler.stop(event)
     def update_thumbnail_in_preview(self, index, new_thumb_img, new_timestamp):
-        try: self.state_manager.get_state().thumbnail_metadata[index]['timestamp_sec'] = new_timestamp
+        try:
+            item = self.state_manager.get_state().thumbnail_metadata[index]
+            item['timestamp_sec'] = new_timestamp
+            frame_path = item.get('frame_path')
+            if frame_path:
+                new_thumb_img.convert('RGB').save(frame_path, quality=92)
         except IndexError: pass
         canvas_handler = self.preview_zoomable_canvas
         layout = self.state_manager.get_state().thumbnail_layout_data
         if not canvas_handler.original_image or index >= len(layout): return
         try:
-            thumb_info = layout[index]
+            thumb_info = next(
+                (value for display_index, value in enumerate(layout)
+                 if int(value.get('source_index', display_index)) == index),
+                None,
+            )
+            if thumb_info is None:
+                return
             rot_val = int(self.rotate_thumbnails_var.get())
             if rot_val == 90: new_thumb_img = new_thumb_img.rotate(-90, expand=True)
             elif rot_val == 180: new_thumb_img = new_thumb_img.rotate(180)
@@ -1515,7 +2089,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 resized = resized.convert("RGBA")
                 mask = Image.new('L', resized.size, 0)
                 draw = ImageDraw.Draw(mask)
-                draw.rounded_rectangle([(0, 0), resized.size], radius=radius, fill=255)
+                radius = min(radius, min(resized.size) // 2)
+                draw.rounded_rectangle([(0, 0), (resized.width - 1, resized.height - 1)], radius=radius, fill=255)
                 existing_alpha = resized.split()[3]
                 final_alpha = ImageChops.multiply(existing_alpha, mask)
                 resized.putalpha(final_alpha)
@@ -1588,6 +2163,13 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             settings.fit_to_output_params = self.fit_to_output_params_var.get()
             settings.output_width = int(self.output_width_var.get())
             settings.output_height = int(self.output_height_var.get())
+            settings.crop_top = float(self.crop_top_var.get() or 0)
+            settings.crop_right = float(self.crop_right_var.get() or 0)
+            settings.crop_bottom = float(self.crop_bottom_var.get() or 0)
+            settings.crop_left = float(self.crop_left_var.get() or 0)
+            settings.thumbnail_aspect_ratio = self.thumbnail_aspect_ratio_var.get()
+            settings.sort_mode = self.sort_mode_var.get()
+            settings.filter_mode = self.filter_mode_var.get()
             
             # --- NEW SETTINGS ---
             settings.recursive_scan = self.recursive_scan_var.get()
@@ -1595,6 +2177,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
             rows = int(self.num_rows_var.get())
             cols = int(self.num_columns_var.get())
+            settings.manual_timestamps = None
             
             if settings.layout_mode == "grid":
                 settings.rows = rows
@@ -1603,8 +2186,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 settings.target_row_height = None
                 settings.interval_seconds = None
                 if active_tab == "Single Source":
-                    current_meta = self.state_manager.get_state().thumbnail_metadata
-                    if current_meta and len(current_meta) == (rows * cols):
+                    current_meta = self._metadata_in_display_order()
+                    if current_meta:
                         settings.manual_timestamps = [m.get('timestamp_sec', 0.0) for m in current_meta]
                 else:
                     settings.manual_timestamps = None
@@ -1614,13 +2197,18 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 settings.max_frames_for_print = None
                 settings.target_row_height = int(self.target_row_height_var.get() or 150)
                 settings.interval_seconds = None
+                if active_tab == "Single Source":
+                    current_meta = self._metadata_in_display_order()
+                    if current_meta:
+                        settings.manual_timestamps = [m.get('timestamp_sec', 0.0) for m in current_meta]
 
             settings.padding = int(self.padding_var.get())
             settings.background_color = self.background_color_var.get()
             settings.frame_format = self.frame_format_var.get()
             settings.save_metadata_json = False 
-            settings.start_time = None
-            settings.end_time = None
+            active_sheet = self.state_manager.get_state().active_sheet()
+            settings.start_time = active_sheet.in_point_sec
+            settings.end_time = active_sheet.out_point_sec
             settings.exclude_frames = None
             settings.exclude_shots = None
             settings.output_naming_mode = self.output_naming_mode_var.get()
@@ -1675,6 +2263,21 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             args=(settings, self._gui_progress_callback),
             daemon=True
         ).start()
+
+    def _metadata_in_display_order(self):
+        state = self.state_manager.get_state()
+        metadata = state.thumbnail_metadata
+        if state.thumbnail_layout_data:
+            ordered = []
+            used = set()
+            for display_index, item in enumerate(state.thumbnail_layout_data):
+                index = int(item.get('source_index', display_index))
+                if 0 <= index < len(metadata) and index not in used and not metadata[index].get('hidden'):
+                    ordered.append(metadata[index])
+                    used.add(index)
+            if ordered:
+                return ordered
+        return [item for item in metadata if not item.get('hidden')]
 
     def run_generation_in_thread(self, settings, progress_cb):
         thread_logger = logging.getLogger(f"gui_thread_{threading.get_ident()}")

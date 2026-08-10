@@ -6,7 +6,7 @@ It ships with both:
 - a desktop GUI (`movieprint_gui.py`) for interactive workflows, and
 - a CLI (`movieprint_maker.py`) for repeatable automation and batch jobs.
 
-Current version: **1.0.0**.
+Current version: **1.1.0**.
 
 ---
 
@@ -19,6 +19,9 @@ Compared to simple “every N seconds” contact-sheet scripts, it adds:
 - **Layout control**: classic fixed-column grids and timeline-style rows.
 - **HDR-aware processing**: optional tone mapping for cleaner SDR outputs from HDR sources.
 - **Usable GUI workflow**: preview, iterative tuning, and per-thumbnail scrubbing.
+- **Editable workspaces**: project round-tripping, multiple sheets, and embedded PNG project data.
+- **Focused frame editing**: hide/add/replace/save frames, IN/OUT points, sorting, and filtering.
+- **Integrated player and transforms**: seek video beside the sheet, then crop, rotate, or constrain aspect ratio.
 - **Automation-first CLI**: deterministic output settings for batch pipelines.
 
 ---
@@ -36,7 +39,8 @@ Compared to simple “every N seconds” contact-sheet scripts, it adds:
 - **Wallpaper mode**: `--fit_to_output_params` to force exact output dimensions.
 
 ### Visual Styling
-- Background color, spacing, rounded corners, thumbnail rotation.
+- Background color, spacing, antialiased MoviePrint-style rounded cards, thumbnail rotation.
+- Non-destructive edge cropping and source/16:9/4:3/1:1/9:16 thumbnail aspect choices.
 - Optional overlays (timecode/frame labels) and optional header.
 - JPEG quality controls and post-save max filesize reduction.
 - Optional **frames-only export** (`--output_frames_only`) to save selected thumbnails as individual files into a folder.
@@ -83,9 +87,12 @@ python movieprint_gui.py
 Recommended GUI flow:
 1. Add source file(s).
 2. Click **Preview** for a draft render.
-3. Scrub specific thumbnails by click-dragging in preview.
-4. Tune layout/styling/HDR settings.
-5. Click **Generate** for final output.
+3. Scrub specific thumbnails by click-dragging, or right-click for the full edit menu.
+4. Use **Player** to seek and replace the selected thumbnail precisely.
+5. Add or duplicate sheets and tune layout/styling/transforms per sheet.
+6. Save an editable `*.pymovieprint.json` project, then click **Generate** for final output.
+
+PNG outputs created by the GUI contain compressed project metadata and can be reopened with **Open Project**. The importer also understands MoviePrint 0.2.x PNG/JSON frame lists when their source video is available.
 
 ### CLI
 
@@ -128,6 +135,7 @@ python movieprint_maker.py ./dailies ./out --recursive_scan --overwrite_mode ski
 - `video_processing.py`: frame extraction engines (FFmpeg/OpenCV), shot detection integration, HDR probing/tone mapping path.
 - `image_grid.py`: rendering engine for grid/timeline compositing, overlays, rounding, and file export.
 - `state_manager.py`: GUI state dataclasses plus undo/redo snapshots.
+- `project_io.py`: versioned JSON projects, embedded PNG data, and MoviePrint 0.2.x import compatibility.
 - `movieprint_gui.spec` + `build_macos.sh`: packaging recipe for standalone macOS app.
 
 ---

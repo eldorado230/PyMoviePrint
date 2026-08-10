@@ -15,11 +15,13 @@ except ImportError as import_error:
     CV2_IMPORT_ERROR = import_error
 import math
 from version import __version__
-from PIL import Image
+from PIL import Image, ImageOps
 
 try:
     import video_processing
     import image_grid
+    import project_io
+    from state_manager import ProjectSettings, ProjectState
 except ImportError as e:
     print(f"Error importing modules: {e}")
     print("Please ensure 'video_processing.py' and 'image_grid.py' are in the same directory.")
@@ -354,11 +356,11 @@ def _limit_frames_for_grid(metadata_list, settings, temp_dir, cleanup_temp, logg
     return selected_metadata
 
 def _process_thumbnails(metadata_list, settings, logger):
-    """Applies Face Detection and Rotation."""
-    
-    # 1. Face Detection
+    """Collect analysis metadata without destructively changing extracted frames."""
     if settings.detect_faces:
-        cascade_path = settings.haar_cascade_xml or os.path.join(cv2.data.haarcascades, 'haarcascade_frontalface_default.xml')
+        cascade_path = settings.haar_cascade_xml or os.path.join(
+            cv2.data.haarcascades, 'haarcascade_frontalface_default.xml'
+        )
         if os.path.exists(cascade_path):
             face_cascade = cv2.CascadeClassifier(cascade_path)
             if not face_cascade.empty():
@@ -366,27 +368,20 @@ def _process_thumbnails(metadata_list, settings, logger):
                 for meta in metadata_list:
                     try:
                         frame_img = cv2.imread(meta['frame_path'])
-                        if frame_img is None: continue
+                        if frame_img is None:
+                            continue
                         gray = cv2.cvtColor(frame_img, cv2.COLOR_BGR2GRAY)
-                        faces = face_cascade.detectMultiScale(gray, scaleFactor=1.1, minNeighbors=4, minSize=(20, 20))
-                        meta['face_detection'] = {'num_faces': len(faces), 'face_bboxes_thumbnail': [list(f) for f in faces]}
-                    except Exception as e:
-                        logger.warning(f"  Face detection failed for '{meta.get('frame_path')}': {e}")
-
-    # 2. Rotation
-    if settings.rotate_thumbnails != 0:
-        rot_flag = {90: cv2.ROTATE_90_CLOCKWISE, 180: cv2.ROTATE_180, 270: cv2.ROTATE_90_COUNTERCLOCKWISE}.get(settings.rotate_thumbnails)
-        if rot_flag is not None:
-            logger.info(f"  Rotating thumbnails by {settings.rotate_thumbnails}°...")
-            for meta in metadata_list:
-                try:
-                    thumb_img = cv2.imread(meta['frame_path'])
-                    if thumb_img is None: continue
-                    rotated = cv2.rotate(thumb_img, rot_flag)
-                    cv2.imwrite(meta['frame_path'], rotated)
-                except Exception as e:
-                    logger.warning(f"  Thumbnail rotation failed for '{meta.get('frame_path')}': {e}")
-
+                        faces = face_cascade.detectMultiScale(
+                            gray, scaleFactor=1.1, minNeighbors=4, minSize=(20, 20)
+                        )
+                        meta['face_detection'] = {
+                            'num_faces': len(faces),
+                            'face_bboxes_thumbnail': [list(face) for face in faces],
+                        }
+                    except Exception as error:
+                        logger.warning(
+                            f"  Face detection failed for '{meta.get('frame_path')}': {error}"
+                        )
     return metadata_list
 
 def _generate_movieprint(metadata_list, settings, output_path, logger):
@@ -420,6 +415,14 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
         'logger': logger,
         'grid_margin': settings.grid_margin,
         'rounded_corners': settings.rounded_corners,
+        'rotation': getattr(settings, 'rotate_thumbnails', 0),
+        'crop_top': getattr(settings, 'crop_top', 0.0),
+        'crop_right': getattr(settings, 'crop_right', 0.0),
+        'crop_bottom': getattr(settings, 'crop_bottom', 0.0),
+        'crop_left': getattr(settings, 'crop_left', 0.0),
+        'thumbnail_aspect_ratio': getattr(settings, 'thumbnail_aspect_ratio', 'source'),
+        'sort_mode': getattr(settings, 'sort_mode', 'timestamp'),
+        'filter_mode': getattr(settings, 'filter_mode', 'visible'),
         'frame_info_show': settings.frame_info_show,
         'show_header': settings.show_header,
         'show_file_path': settings.show_file_path,
@@ -483,7 +486,46 @@ def _export_individual_frames(metadata_list, output_dir, settings, logger):
                 safe_ts = str(round(float(timestamp), 3)).replace('.', 'p')
                 target_name = f"frame_{idx:04d}_{safe_ts}s.{frame_format}"
 
-            shutil.copy2(source_path, os.path.join(staging_dir, target_name))
+            target_path = os.path.join(staging_dir, target_name)
+            has_transform = any((
+                getattr(settings, 'crop_top', 0.0),
+                getattr(settings, 'crop_right', 0.0),
+                getattr(settings, 'crop_bottom', 0.0),
+                getattr(settings, 'crop_left', 0.0),
+                getattr(settings, 'rotate_thumbnails', 0),
+                getattr(settings, 'thumbnail_aspect_ratio', 'source') != 'source',
+            ))
+            if not has_transform:
+                shutil.copy2(source_path, target_path)
+            else:
+                with Image.open(source_path) as source_image:
+                    transformed = image_grid._apply_crop(
+                        source_image,
+                        getattr(settings, 'crop_top', 0.0),
+                        getattr(settings, 'crop_right', 0.0),
+                        getattr(settings, 'crop_bottom', 0.0),
+                        getattr(settings, 'crop_left', 0.0),
+                    )
+                    transformed = image_grid._apply_rotation(
+                        transformed, getattr(settings, 'rotate_thumbnails', 0)
+                    )
+                    aspect = image_grid._aspect_value(
+                        getattr(settings, 'thumbnail_aspect_ratio', 'source')
+                    )
+                    if aspect:
+                        target_w = transformed.width
+                        target_h = max(1, round(target_w / aspect))
+                        if target_h > transformed.height:
+                            target_h = transformed.height
+                            target_w = max(1, round(target_h * aspect))
+                        transformed = ImageOps.fit(
+                            transformed, (target_w, target_h), method=Image.Resampling.LANCZOS
+                        )
+                    save_kwargs = (
+                        {'quality': getattr(settings, 'output_quality', 95)}
+                        if frame_format in {'jpg', 'jpeg'} else {}
+                    )
+                    transformed.convert('RGB').save(target_path, **save_kwargs)
             staged_names.append(target_name)
 
         if not staged_names:
@@ -662,6 +704,25 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
 
         # 7. Post-Processing
         enforce_max_filesize(final_path, settings.max_output_filesize_kb, logger)
+        if final_path.lower().endswith('.png'):
+            try:
+                project_settings = ProjectSettings.from_dict(vars(settings))
+                project_settings.input_paths = [os.path.abspath(video_file_path)]
+                project_settings.num_columns = int(getattr(settings, 'columns', 5) or 5)
+                project_settings.num_rows = int(getattr(settings, 'rows', 5) or 5)
+                project_state = ProjectState(
+                    settings=project_settings,
+                    project_name=os.path.splitext(os.path.basename(final_path))[0],
+                    source_paths=[os.path.abspath(video_file_path)],
+                    thumbnail_metadata=[
+                        dict(item, id=item.get('id') or f"thumb-{index + 1}")
+                        for index, item in enumerate(metadata_list)
+                    ],
+                    thumbnail_layout_data=layout_data or [],
+                )
+                project_io.embed_project_in_png(final_path, project_state)
+            except (OSError, ValueError, TypeError) as error:
+                logger.warning("  Could not embed editable project metadata: %s", error)
         if getattr(settings, 'save_metadata_json', False):
             _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, process_warnings, final_path, logger, source_video_path=video_file_path)
 
@@ -808,7 +869,7 @@ def main():
 
     # Styling & Misc
     style_grp = parser.add_argument_group("Styling & Misc")
-    style_grp.add_argument("--padding", type=int, default=5)
+    style_grp.add_argument("--padding", type=int, default=8)
     style_grp.add_argument("--background_color", type=str, default="#FFFFFF")
     style_grp.add_argument("--frame_format", type=str, default="jpg", choices=["jpg", "png"])
     style_grp.add_argument("--temp_dir", type=str, default=None)
@@ -842,8 +903,13 @@ def main():
     style_grp.add_argument("--frame_info_position", type=str, default="bottom_left")
     style_grp.add_argument("--frame_info_size", type=int, default=10)
     style_grp.add_argument("--frame_info_margin", type=int, default=5)
-    style_grp.add_argument("--rounded_corners", type=int, default=0)
-    style_grp.add_argument("--grid_margin", type=int, default=0)
+    style_grp.add_argument("--rounded_corners", type=int, default=18)
+    style_grp.add_argument("--grid_margin", type=int, default=8)
+    style_grp.add_argument("--crop_top", type=float, default=0.0, help="Crop percent from the top edge.")
+    style_grp.add_argument("--crop_right", type=float, default=0.0, help="Crop percent from the right edge.")
+    style_grp.add_argument("--crop_bottom", type=float, default=0.0, help="Crop percent from the bottom edge.")
+    style_grp.add_argument("--crop_left", type=float, default=0.0, help="Crop percent from the left edge.")
+    style_grp.add_argument("--thumbnail_aspect_ratio", default="source", choices=["source", "16:9", "4:3", "1:1", "9:16"])
 
     args = parser.parse_args()
 
