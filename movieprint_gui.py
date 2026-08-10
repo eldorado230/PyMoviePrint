@@ -2303,13 +2303,15 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.queue.put(("progress", (current, total, filename)))
 
     # --- HELPERS ---
+    def _set_single_source_paths(self, paths):
+        """Update the text-bound source entry without clearing its StringVar."""
+        self._internal_input_paths = [str(path) for path in paths if path]
+        self.input_paths_var.set("; ".join(self._internal_input_paths))
+
     def browse_input_paths(self):
         filepaths = filedialog.askopenfilenames(title="Select Video File(s)")
         if filepaths:
-            self._internal_input_paths = list(filepaths)
-            self.input_paths_var.set("; ".join(self._internal_input_paths))
-            self.input_entry.delete(0, tk.END)
-            self.input_entry.insert(0, self.input_paths_var.get())
+            self._set_single_source_paths(filepaths)
 
     def _add_batch_paths(self, paths):
         added = 0
@@ -2343,10 +2345,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         if active_tab == "Batch Queue":
             self._add_batch_paths(paths)
         else:
-            self._internal_input_paths = list(paths)
-            self.input_paths_var.set("; ".join(paths))
-            self.input_entry.delete(0, tk.END)
-            self.input_entry.insert(0, self.input_paths_var.get())
+            self._set_single_source_paths(paths)
 
     def clear_batch_list(self):
         self.batch_file_list.clear()

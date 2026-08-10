@@ -278,6 +278,18 @@ class AuditRegressionTests(unittest.TestCase):
         self.assertEqual(app.output_naming_mode_var.get(), "custom")
         self.assertEqual(app.naming_mode_display_var.get(), "Fixed Name")
 
+    def test_single_source_picker_keeps_text_bound_path(self):
+        source_path = r"D:\Series\Community (2009)\Season 1\Pilot [x265]-Joy.mkv"
+        app = SimpleNamespace(
+            _internal_input_paths=[],
+            input_paths_var=_Variable(""),
+        )
+
+        movieprint_gui.MoviePrintApp._set_single_source_paths(app, [source_path])
+
+        self.assertEqual(app._internal_input_paths, [source_path])
+        self.assertEqual(app.input_paths_var.get(), source_path)
+
     def test_overlay_flags_control_header_and_frame_label(self):
         config = image_grid.GridConfig(
             output_path="unused.jpg",
