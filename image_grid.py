@@ -50,11 +50,18 @@ class GridConfig:
     output_height: int = 1080
     
     # Common
-    padding: int = 5
+    padding: int = 8
     bg_color_hex: str = "#1E1E1E"
-    grid_margin: int = 0
-    rounded_corners: int = 0
+    grid_margin: int = 8
+    rounded_corners: int = 18
     rotation: int = 0
+    crop_top: float = 0.0
+    crop_right: float = 0.0
+    crop_bottom: float = 0.0
+    crop_left: float = 0.0
+    thumbnail_aspect_ratio: str = "source"
+    sort_mode: str = "timestamp"
+    filter_mode: str = "visible"
     quality: int = 95
     font_settings: FontConfig = field(default_factory=FontConfig)
 
@@ -72,6 +79,52 @@ def _apply_rotation(img: Image.Image, rotation: int) -> Image.Image:
     elif rotation == 270: return img.rotate(-270, expand=True)
     return img
 
+def _clamped_percent(value: Any) -> float:
+    try:
+        return max(0.0, min(45.0, float(value))) / 100.0
+    except (TypeError, ValueError):
+        return 0.0
+
+def _apply_crop(img: Image.Image, top=0, right=0, bottom=0, left=0) -> Image.Image:
+    """Apply safe percentage-based edge crops without allowing an empty image."""
+    left_px = round(img.width * _clamped_percent(left))
+    right_px = round(img.width * (1.0 - _clamped_percent(right)))
+    top_px = round(img.height * _clamped_percent(top))
+    bottom_px = round(img.height * (1.0 - _clamped_percent(bottom)))
+    if right_px <= left_px or bottom_px <= top_px:
+        return img
+    return img.crop((left_px, top_px, right_px, bottom_px))
+
+def _aspect_value(value: Any) -> Optional[float]:
+    if not value or str(value).lower() == "source":
+        return None
+    text = str(value).strip().lower().replace("x", ":")
+    try:
+        if ":" in text:
+            width, height = text.split(":", 1)
+            ratio = float(width) / float(height)
+        else:
+            ratio = float(text)
+        return ratio if ratio > 0 else None
+    except (TypeError, ValueError, ZeroDivisionError):
+        return None
+
+def _apply_source_transform(img: Image.Image, meta: Dict[str, Any], config: GridConfig) -> Image.Image:
+    transform = meta.get("transform") if isinstance(meta.get("transform"), dict) else {}
+    img = _apply_crop(
+        img,
+        transform.get("crop_top", config.crop_top),
+        transform.get("crop_right", config.crop_right),
+        transform.get("crop_bottom", config.crop_bottom),
+        transform.get("crop_left", config.crop_left),
+    )
+    rotation = transform.get("rotation", config.rotation)
+    try:
+        rotation = int(rotation)
+    except (TypeError, ValueError):
+        rotation = config.rotation
+    return _apply_rotation(img, rotation)
+
 def _apply_rounding(img: Image.Image, radius: int) -> Image.Image:
     """
     Applies rounded corners to an image by modifying its alpha channel.
@@ -79,22 +132,57 @@ def _apply_rounding(img: Image.Image, radius: int) -> Image.Image:
     if radius <= 0:
         return img
     
-    # Ensure we are working with RGBA to have an alpha channel
     img = img.convert("RGBA")
-    
-    # Create a mask (white = visible, black = transparent)
-    mask = Image.new('L', img.size, 0)
+    radius = min(max(1, int(radius)), min(img.size) // 2)
+
+    # Supersampling removes the slightly jagged/bulging corners of the old mask.
+    scale = 4
+    mask = Image.new("L", (img.width * scale, img.height * scale), 0)
     draw = ImageDraw.Draw(mask)
-    
-    # Draw the white rounded rectangle
-    draw.rounded_rectangle([(0, 0), img.size], radius=radius, fill=255)
-    
-    # Combine the new mask with the existing alpha channel (if any)
+    draw.rounded_rectangle(
+        (0, 0, (img.width * scale) - 1, (img.height * scale) - 1),
+        radius=radius * scale,
+        fill=255,
+    )
+    mask = mask.resize(img.size, Image.Resampling.LANCZOS)
     existing_alpha = img.split()[3]
     final_alpha = ImageChops.multiply(existing_alpha, mask)
-    
     img.putalpha(final_alpha)
     return img
+
+def _effective_radius(config: GridConfig, width: int, height: int) -> int:
+    """Scale the nominal 480 px radius consistently for portrait and landscape cards."""
+    if config.rounded_corners <= 0:
+        return 0
+    scale = min(width, height) / 270.0
+    return min(max(1, round(config.rounded_corners * scale)), min(width, height) // 2)
+
+def _prepare_image_items(image_paths, config: GridConfig):
+    prepared = []
+    for source_index, item in enumerate(image_paths):
+        path, meta = _coerce_image_item(item)
+        if not path:
+            continue
+        meta = dict(meta)
+        meta.setdefault("source_index", source_index)
+        meta.setdefault("id", f"thumb-{source_index + 1}")
+        if config.filter_mode == "visible" and meta.get("hidden"):
+            continue
+        prepared.append((path, meta))
+
+    reverse = config.sort_mode in {"timestamp_desc", "reverse", "newest"}
+    if config.sort_mode in {"timestamp", "timestamp_desc", "reverse", "newest"}:
+        prepared.sort(key=lambda value: float(value[1].get("timestamp_sec") or 0.0), reverse=reverse)
+    elif config.sort_mode == "frame":
+        prepared.sort(key=lambda value: int(value[1].get("frame_number") or 0))
+    elif config.sort_mode == "duration":
+        prepared.sort(key=lambda value: float(value[1].get("duration_frames") or 0.0), reverse=True)
+    elif config.sort_mode == "faces":
+        prepared.sort(
+            key=lambda value: int((value[1].get("face_detection") or {}).get("num_faces", 0)),
+            reverse=True,
+        )
+    return prepared
 
 def _draw_frame_info(draw, text, img_w, img_h, conf, font):
     bbox = draw.textbbox((0, 0), text, font=font)
@@ -170,8 +258,7 @@ def _header_text(first_path: str, first_meta: Dict[str, Any], config: GridConfig
 def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], config: GridConfig, logger: logging.Logger):
     """Standard grid layout. Supports both dynamic size and fixed output size."""
     layout_data = []
-    image_items = [_coerce_image_item(item) for item in image_paths]
-    image_items = [(path, meta) for path, meta in image_items if path]
+    image_items = _prepare_image_items(image_paths, config)
     if not image_items: return False, []
 
     num_images = len(image_items)
@@ -235,27 +322,33 @@ def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], con
     current_x = config.grid_margin
     current_y = config.grid_margin + header_height
     info_font = _load_font(config.font_settings.get_font_path(), config.font_settings.size)
-    radius_scale_factor = cell_w / 480.0 if cell_w > 0 else 1.0
-
     for i, (path, meta) in enumerate(image_items):
         try:
             with Image.open(path) as img:
                 # 1. Rotate
-                img = _apply_rotation(img, config.rotation)
+                img = _apply_source_transform(img, meta, config)
                 img = img.convert("RGBA")
                 
                 # 2. Resize / Fit
-                if config.fit_to_output_params:
+                aspect = _aspect_value(meta.get("aspect_ratio", config.thumbnail_aspect_ratio))
+                if config.fit_to_output_params or aspect:
                     # Smart crop to fill cell exactly
-                    img = ImageOps.fit(img, (cell_w, cell_h), method=Image.Resampling.LANCZOS)
+                    target_size = (cell_w, cell_h)
+                    if aspect:
+                        target_w = cell_w
+                        target_h = max(1, round(target_w / aspect))
+                        if target_h > cell_h:
+                            target_h = cell_h
+                            target_w = max(1, round(target_h * aspect))
+                        target_size = (target_w, target_h)
+                    img = ImageOps.fit(img, target_size, method=Image.Resampling.LANCZOS)
                 else:
                     # Standard resize keeping aspect ratio
                     img.thumbnail((cell_w, cell_h), Image.Resampling.BICUBIC)
                 
                 # 3. Apply Rounded Corners
                 if config.rounded_corners > 0:
-                    scaled_radius = int(config.rounded_corners * radius_scale_factor)
-                    scaled_radius = max(1, scaled_radius)
+                    scaled_radius = _effective_radius(config, img.width, img.height)
                     img = _apply_rounding(img, scaled_radius)
                 
                 # Center centering for standard mode (if thumbnail aspect ratio < cell aspect ratio)
@@ -270,7 +363,12 @@ def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], con
                         _draw_frame_info(d_tmp, label, img.width, img.height, config.font_settings, info_font)
 
                 grid_image.paste(img, (paste_x, paste_y), mask=img)
-                layout_data.append({'image_path': path, 'x': paste_x, 'y': paste_y, 'width': img.width, 'height': img.height})
+                layout_data.append({
+                    'image_path': path, 'x': paste_x, 'y': paste_y,
+                    'width': img.width, 'height': img.height,
+                    'source_index': meta.get('source_index', i),
+                    'thumbnail_id': meta.get('id'),
+                })
 
         except Exception as e: logger.error(f"Error thumb {path}: {e}")
 
@@ -297,7 +395,7 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
     current_row = []
     current_row_width = 0
 
-    source_items = [_coerce_image_item(item) for item in source_data]
+    source_items = _prepare_image_items(source_data, config)
     width_ratios = []
     for _path, meta in source_items:
         try:
@@ -313,7 +411,7 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
         try:
             with Image.open(path) as img:
                  native_w, native_h = img.size
-                 aspect = native_w / native_h
+                 aspect = _aspect_value(meta.get("aspect_ratio", config.thumbnail_aspect_ratio)) or (native_w / native_h)
                  try:
                      ratio = max(0.01, float(meta.get("width_ratio", 1.0)))
                  except (TypeError, ValueError):
@@ -381,14 +479,12 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
                 draw_w = max(1, int(item_width * scale))
 
                 with Image.open(item['path']) as img:
-                    img = _apply_rotation(img, config.rotation)
+                    img = _apply_source_transform(img, item['meta'], config)
                     img = img.convert("RGBA")
-                    img = img.resize((draw_w, render_row_h), Image.Resampling.BICUBIC)
+                    img = ImageOps.fit(img, (draw_w, render_row_h), method=Image.Resampling.LANCZOS)
 
                     if config.rounded_corners > 0:
-                        radius_scale_factor = render_row_h / 150.0
-                        scaled_radius = int(config.rounded_corners * radius_scale_factor)
-                        scaled_radius = max(1, scaled_radius)
+                        scaled_radius = _effective_radius(config, draw_w, render_row_h)
                         img = _apply_rounding(img, scaled_radius)
 
                     if config.font_settings.frame_info_show:
@@ -399,7 +495,12 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
 
                     grid_image.paste(img, (x, y), mask=img)
                     
-                    layout_data.append({'image_path': item['path'], 'x': x, 'y': y, 'width': draw_w, 'height': render_row_h})
+                    layout_data.append({
+                        'image_path': item['path'], 'x': x, 'y': y,
+                        'width': draw_w, 'height': render_row_h,
+                        'source_index': item['meta'].get('source_index', item['index']),
+                        'thumbnail_id': item['meta'].get('id'),
+                    })
                     x += draw_w + int(config.padding * scale)
             except Exception as e:
                 logger.warning(f"Failed to render timeline thumbnail '{item.get('path')}': {e}")
@@ -431,11 +532,18 @@ def create_image_grid(**kwargs):
         header_title=kwargs.get("header_title", ""),
         columns=kwargs.get("columns", 5),
         rows=kwargs.get("rows", 5), # Passed explicitly
-        padding=kwargs.get("padding", 5),
+        padding=kwargs.get("padding", 8),
         bg_color_hex=kwargs.get("background_color_hex", "#1E1E1E"),
-        grid_margin=kwargs.get("grid_margin", 0),
-        rounded_corners=kwargs.get("rounded_corners", 0),
+        grid_margin=kwargs.get("grid_margin", 8),
+        rounded_corners=kwargs.get("rounded_corners", 18),
         rotation=kwargs.get("rotation", 0),
+        crop_top=kwargs.get("crop_top", 0.0),
+        crop_right=kwargs.get("crop_right", 0.0),
+        crop_bottom=kwargs.get("crop_bottom", 0.0),
+        crop_left=kwargs.get("crop_left", 0.0),
+        thumbnail_aspect_ratio=kwargs.get("thumbnail_aspect_ratio", "source"),
+        sort_mode=kwargs.get("sort_mode", "timestamp"),
+        filter_mode=kwargs.get("filter_mode", "visible"),
         quality=kwargs.get("quality", 95),
         target_thumb_width=kwargs.get("target_thumbnail_width"),
         layout_mode=kwargs.get("layout_mode", "grid"),

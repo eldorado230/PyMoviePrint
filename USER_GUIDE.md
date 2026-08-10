@@ -69,8 +69,10 @@ python movieprint_gui.py
 2. Set extraction + layout settings.
 3. Click **Preview** to generate a draft.
 4. Scrub thumbnails in preview to refine specific cells.
-5. Apply style overlays, margins, color, HDR settings.
-6. Click **Generate** for the full output render.
+5. Right-click a thumbnail to hide, add, replace, save, set IN/OUT, or expand it.
+6. Use **Player** to seek the source and apply its playhead to the selected thumbnail.
+7. Add or duplicate sheets; each sheet keeps its own thumbnails and settings.
+8. Save an editable project, then click **Generate** for the full output render.
 
 ### 3.2 Scrubbing (high-impact feature)
 
@@ -84,6 +86,20 @@ python movieprint_gui.py
 - Logs are written under the user profile (`~/.pymovieprint/logs`) to assist debugging.
 - Cancel stops a batch before the next video begins. The current FFmpeg extraction step is allowed to finish safely first.
 - Fixed Name works for a recursive parent-folder batch when each source video is in a different folder. PyMoviePrint blocks only outputs that resolve to the same final path.
+
+### 3.4 Projects, sheets, and MoviePrint imports
+
+- **Save Project** writes a portable `*.pymovieprint.json` file containing source references, sheet settings, frame times, hidden state, transforms, and IN/OUT points.
+- GUI-generated PNG movieprints also embed that project payload and can be reopened directly.
+- **Open Project** accepts PyMoviePrint project JSON/PNG and MoviePrint 0.2.x PNG/JSON exports. Frames are reconstructed from the referenced source video, so the video must still be available.
+- Use **+**, **DUP**, and **-** beside the sheet selector to create, clone, or remove sheets.
+
+### 3.5 Sorting, filtering, and transforms
+
+- Sort by timestamp, reverse timestamp, frame number, duration, detected face count, or manual order.
+- **Show hidden** temporarily includes hidden thumbnails for restoration or inspection. Hidden frames do not appear in final generation.
+- Crop each video edge by percentage, choose a thumbnail aspect, and rotate without modifying the source video.
+- Rounded cards now use antialiased clipping with an 18-at-480px default and balanced 8px gutters/margins.
 
 ---
 
@@ -185,6 +201,8 @@ When fixed grid output is requested without `--rows` or an interval, PyMoviePrin
 - `--background_color`
 - `--rounded_corners`
 - `--rotate_thumbnails {0,90,180,270}`
+- `--crop_top`, `--crop_right`, `--crop_bottom`, `--crop_left` (percent)
+- `--thumbnail_aspect_ratio {source,16:9,4:3,1:1,9:16}`
 - `--frame_format {jpg,png}`
 - `--output_quality`
 - `--max_output_filesize_kb`
