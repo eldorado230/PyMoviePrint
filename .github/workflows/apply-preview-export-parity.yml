@@ -23,7 +23,16 @@ jobs:
         with:
           python-version: '3.11'
       - name: Apply targeted patch
-        run: python .github/apply_preview_export_parity.py
+        run: |
+          if ! python .github/apply_preview_export_parity.py > .github/patch_error.txt 2>&1; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add .github/patch_error.txt
+            git commit -m "Capture parity patch diagnostic"
+            git push origin HEAD:${GITHUB_REF_NAME}
+            exit 1
+          fi
+          rm -f .github/patch_error.txt
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
