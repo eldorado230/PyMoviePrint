@@ -30,7 +30,7 @@ def replace_once(path, old, new, label):
         text = handle.read()
 
     selected = None
-    for extra in (0, 4, 8, 12, 16, 20):
+    for extra in range(0, 41, 4):
         candidate = _indent_candidate(old, extra)
         pattern = r'\\r?\\n'.join(re.escape(line) for line in candidate.split('\\n'))
         matches = list(re.finditer(pattern, text))
