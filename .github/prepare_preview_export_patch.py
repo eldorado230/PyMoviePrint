@@ -32,7 +32,10 @@ def replace_once(path, old, new, label):
     selected = None
     for extra in range(0, 41, 4):
         candidate = _indent_candidate(old, extra)
-        pattern = r'\\r?\\n'.join(re.escape(line) for line in candidate.split('\\n'))
+        pattern = r'\\r?\\n'.join(
+            r'[ \\t]*' if line == '' else re.escape(line)
+            for line in candidate.split('\\n')
+        )
         matches = list(re.finditer(pattern, text))
         if len(matches) == 1:
             selected = (matches[0], extra)
