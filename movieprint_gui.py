@@ -292,6 +292,8 @@ class ScrubbingHandler:
 
 # --- UI COMPONENTS ---
 class ZoomableCanvas(ctk.CTkFrame):
+    MAX_ZOOM = 5.0
+
     def __init__(self, master, app_ref: 'MoviePrintApp', **kwargs):
         super().__init__(master, **kwargs)
         self.app_ref = app_ref
@@ -312,6 +314,8 @@ class ZoomableCanvas(ctk.CTkFrame):
         self.original_image: Optional[Image.Image] = None
         self.photo_image: Optional[ImageTk.PhotoImage] = None
         self._zoom_level: float = 1.0
+        self._auto_fit: bool = False
+        self._fit_after_id = None
         
         self.canvas.bind("<ButtonPress-1>", self.on_button_press)
         self.canvas.bind("<B1-Motion>", self.on_mouse_drag)
@@ -320,6 +324,7 @@ class ZoomableCanvas(ctk.CTkFrame):
         self.canvas.bind("<Button-4>", self.on_mouse_wheel)   
         self.canvas.bind("<Button-5>", self.on_mouse_wheel)   
         self.canvas.bind("<Button-3>", self.app_ref.show_thumbnail_menu)
+        self.canvas.bind("<Configure>", self._on_canvas_configure, add="+")
         
         if DND_ENABLED:
             try:
@@ -355,7 +360,7 @@ class ZoomableCanvas(ctk.CTkFrame):
         else:
             return
 
-        new_zoom = max(0.1, min(5.0, new_zoom))
+        new_zoom = max(0.01, min(self.MAX_ZOOM, new_zoom))
         self.app_ref.zoom_level_var.set(new_zoom)
         self.set_zoom(new_zoom)
 
@@ -368,9 +373,44 @@ class ZoomableCanvas(ctk.CTkFrame):
 
     def set_zoom(self, scale_level: float):
         scale_level = float(scale_level)
+        self._auto_fit = False
         if self._zoom_level == scale_level: return
         self._zoom_level = scale_level
         self._apply_zoom()
+
+    @staticmethod
+    def _calculate_fit_zoom(image_width: int, image_height: int,
+                            viewport_width: int, viewport_height: int) -> float:
+        """Return a contain scale that keeps the whole image in the viewport."""
+        if min(image_width, image_height, viewport_width, viewport_height) <= 0:
+            return 1.0
+        return min(
+            ZoomableCanvas.MAX_ZOOM,
+            viewport_width / image_width,
+            viewport_height / image_height,
+        )
+
+    def _on_canvas_configure(self, _event=None):
+        if not self._auto_fit or not self.original_image:
+            return
+        if self._fit_after_id is not None:
+            self.after_cancel(self._fit_after_id)
+        self._fit_after_id = self.after(75, self._fit_image_to_window)
+
+    def _fit_image_to_window(self):
+        self._fit_after_id = None
+        if not self._auto_fit or not self.original_image or not self.image_id:
+            return
+        self._zoom_level = self._calculate_fit_zoom(
+            self.original_image.width,
+            self.original_image.height,
+            self.canvas.winfo_width(),
+            self.canvas.winfo_height(),
+        )
+        self.app_ref.zoom_level_var.set(self._zoom_level)
+        self._apply_zoom()
+        self.canvas.xview_moveto(0)
+        self.canvas.yview_moveto(0)
 
     def _apply_zoom(self):
         if not self.original_image or not self.image_id: return
@@ -394,23 +434,23 @@ class ZoomableCanvas(ctk.CTkFrame):
             return
         try:
             self.original_image = Image.open(image_path)
-            self.app_ref.zoom_level_var.set(1.0)
-            self._zoom_level = 1.0
-            display_image = self.original_image if self.original_image.mode in ("RGB", "RGBA", "L") else self.original_image.convert("RGBA")
-            self.photo_image = ImageTk.PhotoImage(display_image)
-            
             if self.image_id: self.canvas.delete(self.image_id)
-            self.image_id = self.canvas.create_image(0, 0, anchor="nw", image=self.photo_image)
-            self.canvas.configure(scrollregion=self.canvas.bbox(self.image_id))
+            self.image_id = self.canvas.create_image(0, 0, anchor="nw")
+            self._auto_fit = True
+            self._fit_image_to_window()
         except Exception as e:
             logging.error(f"Error setting image: {e}")
             self.clear()
 
     def clear(self):
+        if self._fit_after_id is not None:
+            self.after_cancel(self._fit_after_id)
+            self._fit_after_id = None
         if self.image_id: self.canvas.delete(self.image_id)
         self.image_id = None
         self.original_image = None
         self.photo_image = None
+        self._auto_fit = False
         self.canvas.configure(scrollregion=(0,0,0,0))
 
 
@@ -715,7 +755,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         zoom_row = ctk.CTkFrame(self.toolbar_frame, fg_color="transparent")
         zoom_row.pack(fill="x", pady=(3, 0))
         ctk.CTkLabel(zoom_row, text="Zoom:", text_color=Theme.TEXT_MUTED).pack(side="left", padx=5)
-        self.zoom_slider = ctk.CTkSlider(zoom_row, from_=0.1, to=5.0, variable=self.zoom_level_var,
+        self.zoom_slider = ctk.CTkSlider(zoom_row, from_=0.01, to=5.0, variable=self.zoom_level_var,
                                         command=self.preview_zoomable_canvas.set_zoom, width=150, progress_color=Theme.ACCENT_BLUE)
         self.zoom_slider.pack(side="left", padx=5)
         ctk.CTkLabel(
