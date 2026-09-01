@@ -17,7 +17,6 @@ import traceback
 import numpy as np
 from typing import Optional, List, Dict, Any, Tuple, Union
 from PIL import ImageTk, Image, ImageDraw, ImageChops, ImageOps
-import project_io
 
 # --- DEPENDENCY MANAGEMENT ---
 class DependencyManager:
@@ -28,6 +27,7 @@ class DependencyManager:
     movieprint_maker = None
     movieprint_maker_module = None
     image_grid = None
+    project_io = None
     version = "0.0.0"
     
     @classmethod
@@ -36,6 +36,7 @@ class DependencyManager:
             ("video_processing", "video_processing"),
             ("image_grid", "image_grid"),
             ("state_manager", "state_manager"),
+            ("project_io", "project_io"),
             ("movieprint_maker", "movieprint_maker"),
             ("version", "version")
         ]
@@ -63,6 +64,7 @@ class DependencyManager:
             cls.version = cls.version.__version__
 
 DependencyManager.load()
+project_io = DependencyManager.project_io
 
 # Handle TkinterDnD2
 DND_ENABLED = False
@@ -208,7 +210,7 @@ class ScrubbingHandler:
         self.start_x: int = 0
         self.original_timestamp: float = 0.0
         self.video_path: Optional[str] = None
-        self._scrub_queue: queue.LifoQueue = queue.LifoQueue(maxsize=10)
+        self._scrub_queue: queue.Queue = queue.Queue(maxsize=1)
         self._stop_event = threading.Event()
         self._worker_thread: Optional[threading.Thread] = None
 
@@ -222,13 +224,14 @@ class ScrubbingHandler:
         self.video_path = video_path
         
         self.app.preview_zoomable_canvas.canvas.config(cursor="sb_h_double_arrow")
-        self._stop_event.clear()
+        self._stop_event = threading.Event()
+        session_event = self._stop_event
         
-        while not self._scrub_queue.empty():
+        while True:
             try: self._scrub_queue.get_nowait()
             except queue.Empty: break
-            
-        self._worker_thread = threading.Thread(target=self._scrub_worker, daemon=True)
+
+        self._worker_thread = threading.Thread(target=self._scrub_worker, args=(session_event,), daemon=True)
         self._worker_thread.start()
 
     def stop(self, event):
@@ -236,8 +239,15 @@ class ScrubbingHandler:
             self.active = False
             self.thumbnail_index = -1
             self.app.preview_zoomable_canvas.canvas.config(cursor="")
-            self._stop_event.set()
-            self._scrub_queue.put(None) 
+            stop_event = self._stop_event
+            stop_event.set()
+            try:
+                self._scrub_queue.put_nowait(None)
+            except queue.Full:
+                try: self._scrub_queue.get_nowait()
+                except queue.Empty: pass
+                try: self._scrub_queue.put_nowait(None)
+                except queue.Full: pass
             self.app.queue.put(("log", "Scrubbing finished."))
             self.app.after(0, self.app.quick_refresh_layout)
 
@@ -248,16 +258,21 @@ class ScrubbingHandler:
         time_offset = dx / pixels_per_second
         new_timestamp = max(0.0, self.original_timestamp + time_offset)
         try:
-            self._scrub_queue.put((new_timestamp, self.thumbnail_index), block=False)
-        except queue.Full: pass 
+            self._scrub_queue.put_nowait((new_timestamp, self.thumbnail_index))
+        except queue.Full:
+            try: self._scrub_queue.get_nowait()
+            except queue.Empty: pass
+            try: self._scrub_queue.put_nowait((new_timestamp, self.thumbnail_index))
+            except queue.Full: pass
 
-    def _scrub_worker(self):
+    def _scrub_worker(self, stop_event=None):
+        stop_event = stop_event or self._stop_event
         if not DependencyManager.video_processing: return
         VideoExtractor = DependencyManager.video_processing.VideoExtractor
         
         try:
             with VideoExtractor(self.video_path) as extractor:
-                while not self._stop_event.is_set():
+                while not stop_event.is_set():
                     try:
                         item = self._scrub_queue.get(timeout=0.5)
                         if item is None: break 
@@ -267,12 +282,11 @@ class ScrubbingHandler:
                             try:
                                 next_item = self._scrub_queue.get_nowait()
                                 if next_item is None:
-                                    self._stop_event.set()
+                                    stop_event.set()
                                     break
-                                target_ts, thumb_idx = next_item
                             except queue.Empty: break
                         
-                        if self._stop_event.is_set(): break
+                        if stop_event.is_set(): break
                         
                         frame = extractor.extract_single_frame(target_ts)
                         if frame is not None:
@@ -1508,8 +1522,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         )
         if not missing:
             return
-        sources = state.source_paths or state.settings.input_paths
-        if not sources or not os.path.exists(sources[0]):
+        sources = list(state.source_paths or state.settings.input_paths)
+        if not sources or not any(os.path.exists(path) for path in sources):
             replacement = filedialog.askopenfilename(
                 title="Locate the source video for this project",
                 filetypes=[("Video files", "*.mp4 *.mov *.mkv *.avi *.wmv *.flv"), ("All files", "*.*")],
@@ -1522,14 +1536,13 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         if self.preview_temp_dir and os.path.exists(self.preview_temp_dir):
             self.temp_dirs_to_cleanup.append(self.preview_temp_dir)
         self.preview_temp_dir = tempfile.mkdtemp(prefix="movieprint_project_")
-        video_path = sources[0]
+        video_path = next((path for path in sources if os.path.exists(path)), sources[0])
         cv2 = DependencyManager.video_processing.cv2
         cap = cv2.VideoCapture(video_path)
         fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0) if cap.isOpened() else 25.0
         video_width = float(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1.0) if cap.isOpened() else 1.0
         video_height = float(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1.0) if cap.isOpened() else 1.0
-        if cap.isOpened():
-            cap.release()
+        if cap.isOpened(): cap.release()
         if getattr(state.settings, 'crop_units', 'percent') == 'pixels':
             state.settings.crop_top = state.settings.crop_top * 100.0 / video_height
             state.settings.crop_bottom = state.settings.crop_bottom * 100.0 / video_height
@@ -1539,13 +1552,22 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         for sheet_index, sheet in enumerate(state.sheets):
             sheet_dir = os.path.join(self.preview_temp_dir, f"sheet_{sheet_index + 1}")
             os.makedirs(sheet_dir, exist_ok=True)
-            with DependencyManager.video_processing.VideoExtractor(video_path, logging.getLogger("project_open")) as extractor:
+            extractors = {}
+            try:
                 for item_index, item in enumerate(sheet.thumbnail_metadata):
                     if item.get('frame_path') and os.path.exists(item['frame_path']):
                         continue
+                    item_source = item.get('video_path')
+                    if not item_source or not os.path.exists(item_source):
+                        item_source = video_path
+                    if item_source not in extractors:
+                        extractors[item_source] = DependencyManager.video_processing.VideoExtractor(item_source, logging.getLogger("project_open"))
+                        extractors[item_source].__enter__()
+                    extractor = extractors[item_source]
                     timestamp = item.get('timestamp_sec')
                     if timestamp is None and item.get('frame_number') is not None:
-                        timestamp = float(item['frame_number']) / max(fps, 0.001)
+                        source_fps = float(extractor.properties[0] or fps or 25.0)
+                        timestamp = float(item['frame_number']) / max(source_fps, 0.001)
                     timestamp = float(timestamp or 0.0)
                     frame = extractor.extract_single_frame(timestamp)
                     if frame is None:
@@ -1554,9 +1576,12 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                     cv2.imwrite(frame_path, frame)
                     item['frame_path'] = frame_path
                     item['timestamp_sec'] = timestamp
-                    item['video_path'] = video_path
-                    item['video_filename'] = os.path.basename(video_path)
+                    item['video_path'] = item_source
+                    item['video_filename'] = os.path.basename(item_source)
                     item['needs_extraction'] = False
+            finally:
+                for extractor in extractors.values():
+                    extractor.__exit__(None, None, None)
         state.activate_sheet(state.active_sheet_id, save_current=False)
 
     # --- THUMBNAIL EDITING ---
@@ -1853,7 +1878,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def _thumbnail_preview_thread(self, video_path, temp_dir, config):
         logger = logging.getLogger(f"preview_{threading.get_ident()}")
-        logger.addHandler(QueueHandler(self.queue))
+        queue_handler = QueueHandler(self.queue)
+        logger.addHandler(queue_handler)
         meta = []
         success = False
         failure_reason = None
@@ -1963,6 +1989,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             logger.exception("Preview generation failed")
             failure_reason = str(e)
         finally:
+            logger.removeHandler(queue_handler)
             self.queue.put(("progress", (0, 0, "")))
             if failure_reason:
                 self.queue.put(("preview_failed", {"reason": failure_reason}))
@@ -2270,7 +2297,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
             if active_tab == "Single Source":
                 current_meta = self._metadata_in_display_order()
-                if current_meta:
+                if self._preview_metadata_matches_single_source(final_input_list, current_meta):
                     settings.manual_timestamps = [
                         float(item.get('timestamp_sec') or 0.0) for item in current_meta
                     ]
@@ -2353,10 +2380,28 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 return ordered
         return [item for item in metadata if not item.get('hidden')]
 
+    @staticmethod
+    def _preview_metadata_matches_single_source(input_paths, metadata):
+        """Only reuse preview edits for the exact file that produced the preview."""
+        if len(input_paths) != 1 or not metadata:
+            return False
+
+        input_path = os.path.abspath(input_paths[0])
+        if not os.path.isfile(input_path):
+            return False
+
+        preview_paths = {
+            os.path.normcase(os.path.abspath(item['video_path']))
+            for item in metadata
+            if item.get('video_path')
+        }
+        return preview_paths == {os.path.normcase(input_path)}
+
     def run_generation_in_thread(self, settings, progress_cb):
         thread_logger = logging.getLogger(f"gui_thread_{threading.get_ident()}")
         thread_logger.setLevel(logging.INFO)
-        thread_logger.addHandler(QueueHandler(self.queue))
+        queue_handler = QueueHandler(self.queue)
+        thread_logger.addHandler(queue_handler)
         try:
             successful_ops, failed_ops = DependencyManager.movieprint_maker(
                 settings, thread_logger, progress_cb, fast_preview=False
@@ -2366,6 +2411,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             successful_ops = []
             failed_ops = [{"reason": str(e)}]
         finally:
+            thread_logger.removeHandler(queue_handler)
             self.queue.put(("generation_done", {
                 "successful_ops": successful_ops,
                 "failed_ops": failed_ops,
@@ -2497,7 +2543,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 self.update_visibility_state()
                 self._toggle_naming_inputs()
                 self._toggle_hdr_options()
-        except Exception: pass
+        except Exception as error:
+            logging.getLogger(__name__).warning(
+                "Could not load saved GUI settings; using defaults: %s", error
+            )
         finally:
             self._loading_persistent_settings = False
 
@@ -2507,7 +2556,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             if hasattr(self, var_name): settings[key] = getattr(self, var_name).get()
         try:
             with open(SETTINGS_FILE, 'w') as f: json.dump(settings, f, indent=4)
-        except: pass
+        except (OSError, TypeError) as error:
+            logging.getLogger(__name__).warning("Could not save GUI settings: %s", error)
         if self.preview_temp_dir and os.path.exists(self.preview_temp_dir): self.temp_dirs_to_cleanup.append(self.preview_temp_dir)
         self._cleanup_garbage_dirs()
         self.destroy()

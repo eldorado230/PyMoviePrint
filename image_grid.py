@@ -299,8 +299,24 @@ def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], con
                 logger.warning(f"Could not inspect thumbnail '{p}' for sizing: {e}")
         
         cell_w = config.target_thumb_width if config.target_thumb_width else (max_w or 200)
-        if max_w > 0: cell_h = int(cell_w * (max_h / max_w))
-        else: cell_h = 150
+        # An explicit thumbnail aspect controls the cell geometry, not only
+        # the crop inside it. This keeps 3x3 prints consistent with a 16:9
+        # source even when the encoded frames are SD/4:3 pixels.
+        requested_aspect = _aspect_value(config.thumbnail_aspect_ratio)
+        if requested_aspect:
+            cell_h = max(1, round(cell_w / requested_aspect))
+        else:
+            source_aspect = None
+            for _path, meta in image_items[:5]:
+                source_aspect = _aspect_value(meta.get("aspect_ratio"))
+                if source_aspect:
+                    break
+            if source_aspect:
+                cell_h = max(1, round(cell_w / source_aspect))
+            elif max_w > 0:
+                cell_h = int(cell_w * (max_h / max_w))
+            else:
+                cell_h = 150
 
         rows_calculated = math.ceil(num_images / config.columns)
         
@@ -378,6 +394,9 @@ def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], con
         else:
             current_x += cell_w + config.padding
 
+    if not layout_data:
+        logger.error("No valid thumbnails could be rendered; refusing to save a blank MoviePrint.")
+        return False, []
     if _save_image_optimized(grid_image, config.output_path, config.quality, logger):
         return True, layout_data
     else:

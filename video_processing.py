@@ -12,6 +12,7 @@ import glob
 import math
 import json
 import sys
+import time
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional, Tuple, Union
@@ -109,28 +110,46 @@ class VideoUtils:
         return VideoUtils._zscale_checked
 
     @staticmethod
-    def run_ffmpeg_command(cmd: List[str], logger: logging.Logger) -> bool:
+    def run_ffmpeg_command(cmd: List[str], logger: logging.Logger,
+                           cancel_event=None, timeout: Optional[float] = None) -> bool:
+        return VideoUtils.run_ffmpeg_command_with_control(cmd, logger, cancel_event, timeout)
+
+    @staticmethod
+    def run_ffmpeg_command_with_control(cmd: List[str], logger: logging.Logger,
+                                        cancel_event=None, timeout: Optional[float] = None) -> bool:
+        process = None
         try:
-            process = subprocess.run(
-                cmd, 
-                check=True, 
-                stdout=subprocess.PIPE, 
-                stderr=subprocess.PIPE, 
+            process = subprocess.Popen(
+                cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                 startupinfo=VideoUtils.get_startup_info()
             )
-            return True
-        except subprocess.CalledProcessError as e:
-            try:
-                err_msg = e.stderr.decode('utf-8', errors='replace')
-            except:
-                err_msg = str(e.stderr)
-            
-            relevant_lines = "\n".join(err_msg.splitlines()[-10:])
-            logger.error(f"FFmpeg failed.\nCommand: {' '.join(cmd)}\nError tail: {relevant_lines}")
+            deadline = time.monotonic() + (timeout or 3600)
+            while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    process.terminate()
+                    try: process.wait(timeout=5)
+                    except subprocess.TimeoutExpired: process.kill()
+                    logger.info("FFmpeg cancelled. Command: %s", ' '.join(cmd))
+                    return False
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    process.kill(); process.communicate()
+                    logger.error("FFmpeg timed out after %ss. Command: %s", timeout or 3600, ' '.join(cmd))
+                    return False
+                try:
+                    stdout, stderr = process.communicate(timeout=min(0.25, remaining))
+                    break
+                except subprocess.TimeoutExpired:
+                    continue
+            if process.returncode == 0:
+                return True
+            err_msg = (stderr or b'').decode('utf-8', errors='replace') if isinstance(stderr, bytes) else str(stderr or '')
+            logger.error("FFmpeg failed.\nCommand: %s\nError tail: %s", ' '.join(cmd), "\n".join(err_msg.splitlines()[-10:]))
             return False
         except Exception as e:
-            logger.error(f"Execution error: {e}")
+            logger.error("Execution error: %s", e)
             return False
+
 
 class VideoExtractor:
     def __init__(self, video_path: str, logger: Optional[logging.Logger] = None):
@@ -139,7 +158,9 @@ class VideoExtractor:
         self.video_filename = os.path.basename(video_path)
         self.logger = logger or logging.getLogger(__name__)
         self._cap: Optional[cv2.VideoCapture] = None
-        self._is_hdr_confirmed = None 
+        self._is_hdr_confirmed = None
+        self._hdr_transfer = None
+        self._display_aspect_ratio: Optional[float] = None
         
         if not os.path.exists(video_path):
             raise FileNotFoundError(f"Video file not found: {video_path}")
@@ -167,6 +188,50 @@ class VideoExtractor:
         finally:
             if local_open: cap.release()
 
+    @property
+    def display_aspect_ratio(self) -> Optional[float]:
+        """Return the stream's display aspect ratio, including anamorphic SAR."""
+        cached_ratio = getattr(self, '_display_aspect_ratio', None)
+        if cached_ratio is not None:
+            return cached_ratio
+        if not shutil.which(FFPROBE_BIN):
+            return None
+
+        cmd = [
+            FFPROBE_BIN, '-v', 'error', '-select_streams', 'v:0',
+            '-show_entries', 'stream=width,height,sample_aspect_ratio,display_aspect_ratio',
+            '-of', 'json', self.video_path,
+        ]
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True,
+                startupinfo=VideoUtils.get_startup_info(), timeout=10,
+            )
+            stream = json.loads(result.stdout).get('streams', [{}])[0]
+
+            # DAR is authoritative when present. Otherwise calculate it from
+            # coded dimensions and SAR (important for DVD-era 720x480 video).
+            ratio_text = stream.get('display_aspect_ratio')
+            if ratio_text and ratio_text != 'N/A' and ':' in ratio_text:
+                numerator, denominator = ratio_text.split(':', 1)
+                ratio = float(numerator) / float(denominator)
+            else:
+                width = float(stream.get('width') or 0)
+                height = float(stream.get('height') or 0)
+                sar = stream.get('sample_aspect_ratio')
+                if not (width > 0 and height > 0):
+                    return None
+                sar_ratio = 1.0
+                if sar and sar != 'N/A' and ':' in sar:
+                    sar_num, sar_den = sar.split(':', 1)
+                    sar_ratio = float(sar_num) / float(sar_den)
+                ratio = (width / height) * sar_ratio
+
+            self._display_aspect_ratio = ratio if ratio > 0 else None
+        except (OSError, ValueError, TypeError, json.JSONDecodeError, IndexError, ZeroDivisionError):
+            self._display_aspect_ratio = None
+        return self._display_aspect_ratio
+
     def detect_hdr(self) -> bool:
         """
         Detects if video is HDR based on color transfer/primaries.
@@ -185,7 +250,13 @@ class VideoExtractor:
             '-of', 'json', self.video_path
         ]
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, startupinfo=VideoUtils.get_startup_info())
+            res = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                startupinfo=VideoUtils.get_startup_info(),
+                timeout=10,
+            )
             data = json.loads(res.stdout)
             streams = data.get('streams', [])
             if not streams: 
@@ -196,16 +267,28 @@ class VideoExtractor:
             transfer = s.get('color_transfer', '').lower()
             primaries = s.get('color_primaries', '').lower()
             
-            # Strict HDR signatures
-            hdr_signatures = ['smpte2084', 'arib-std-b67', 'bt2020']
-            
-            is_hdr = any(sig in transfer for sig in hdr_signatures) or ('bt2020' in primaries)
+            self._hdr_transfer = ('arib-std-b67' if 'arib-std-b67' in transfer else
+                                  'smpte2084' if 'smpte2084' in transfer else None)
+            is_hdr = self._hdr_transfer is not None
             
             self._is_hdr_confirmed = is_hdr
             return is_hdr
+        except subprocess.TimeoutExpired:
+            self.logger.warning("FFprobe timed out while checking HDR metadata for %s", self.video_path)
+            self._is_hdr_confirmed = False
+            return False
         except Exception:
             self._is_hdr_confirmed = False
             return False
+
+    def detect_hdr_type(self) -> str:
+        """Return PQ, HLG, or SDR based on the stream transfer characteristic."""
+        self.detect_hdr()
+        if self._hdr_transfer == 'arib-std-b67':
+            return 'HLG'
+        if self._hdr_transfer == 'smpte2084':
+            return 'PQ'
+        return 'SDR'
 
     def extract_single_frame(self, timestamp_sec: float) -> Optional[Any]:
         cap = self._cap
@@ -221,7 +304,7 @@ class VideoExtractor:
         finally:
             if local_open: cap.release()
 
-    def _build_hdr_filter_chain(self, hdr_algorithm: str) -> str:
+    def _build_hdr_filter_chain(self, hdr_algorithm: str, hdr_type: Optional[str] = None) -> str:
         has_zscale = VideoUtils.check_ffmpeg_zscale(self.logger)
         algo = hdr_algorithm.lower() if hdr_algorithm else 'hable'
         
@@ -230,7 +313,7 @@ class VideoExtractor:
         if has_zscale:
             return (
                 f"{pre_filter},"
-                "zscale=tin=smpte2084:pin=bt2020:rin=tv:t=linear:npl=100,format=gbrpf32le,"
+                f"zscale=tin={'arib-std-b67' if hdr_type == 'HLG' or self._hdr_transfer == 'arib-std-b67' else 'smpte2084'}:pin=bt2020:rin=tv:t=linear:npl=100,format=gbrpf32le,"
                 f"tonemap=tonemap={algo}:desat=0,"
                 "zscale=p=bt709:m=bt709:t=bt709:r=tv,format=yuv420p"
             )
@@ -244,8 +327,8 @@ class VideoExtractor:
                 "format=yuv420p"
             )
 
-    def extract_timestamps_optimized(self, timestamps: List[float], output_folder: str, ext: str = "jpg", 
-                                      fast_preview: bool = False, hdr_tonemap: bool = False, hdr_algorithm: str = 'hable') -> List[Dict[str, Any]]:
+    def extract_timestamps_optimized(self, timestamps: List[float], output_folder: str, ext: str = "jpg",
+                                      fast_preview: bool = False, hdr_tonemap: bool = False, hdr_algorithm: str = 'hable', cancel_event=None) -> List[Dict[str, Any]]:
         """
         Extracts frames using FFmpeg Seeking (-ss).
         Handles BOTH SDR and HDR content.
@@ -260,6 +343,7 @@ class VideoExtractor:
         fps, _, _ = self.properties
         if fps <= 0: fps = 24.0
         total_frames = len(timestamps)
+        display_aspect_ratio = self.display_aspect_ratio
 
         # Safety Lock for HDR Tone Mapping
         use_gpu = False
@@ -279,7 +363,8 @@ class VideoExtractor:
              # GPU must be disabled for tone mapping to work reliably
              pass
 
-        hdr_filters = self._build_hdr_filter_chain(hdr_algorithm) if hdr_tonemap else ""
+        hdr_type = self.detect_hdr_type() if hdr_tonemap else None
+        hdr_filters = self._build_hdr_filter_chain(hdr_algorithm, hdr_type) if hdr_tonemap else ""
         
         def extract_one(i, ts):
             if not fast_preview:
@@ -319,7 +404,7 @@ class VideoExtractor:
                 '-y', '-hide_banner', '-loglevel', 'error'
             ])
 
-            success = VideoUtils.run_ffmpeg_command(cmd, self.logger)
+            success = VideoUtils.run_ffmpeg_command(cmd, self.logger, cancel_event=cancel_event)
 
             if success and os.path.exists(final_path):
                 return {
@@ -328,6 +413,7 @@ class VideoExtractor:
                     'timestamp_sec': ts,
                     'video_filename': self.video_filename,
                     'video_path': os.path.abspath(self.video_path),
+                    **({'aspect_ratio': display_aspect_ratio} if display_aspect_ratio else {}),
                 }
             return None
 
@@ -426,11 +512,11 @@ class VideoExtractor:
         
         return final_results
 
-    def extract_via_ffmpeg(self, output_folder: str, 
+    def extract_via_ffmpeg(self, output_folder: str,
                           interval_sec: Optional[float] = None, interval_frames: Optional[int] = None,
                           ext: str = "jpg", use_gpu: bool = False, start_time: float = 0.0, end_time: Optional[float] = None,
                           fast_preview: bool = False,
-                          hdr_tonemap: bool = False, hdr_algorithm: str = 'hable') -> List[Dict[str, Any]]:
+                          hdr_tonemap: bool = False, hdr_algorithm: str = 'hable', cancel_event=None) -> List[Dict[str, Any]]:
         # This function handles the 'Interval' mode where we output many frames at once.
         # We leave this mostly as-is but ensuring GPU logic is safe.
         if not shutil.which(FFMPEG_BIN):
@@ -441,6 +527,7 @@ class VideoExtractor:
         Path(output_folder).mkdir(parents=True, exist_ok=True)
         fps, _, _ = self.properties
         if fps <= 0: fps = 24.0
+        display_aspect_ratio = self.display_aspect_ratio
 
         filters = []
         use_variable_frame_rate = False
@@ -487,7 +574,7 @@ class VideoExtractor:
             '-y', '-hide_banner', '-loglevel', 'error'
         ])
 
-        if not VideoUtils.run_ffmpeg_command(base_cmd + input_args + output_args, self.logger):
+        if not VideoUtils.run_ffmpeg_command(base_cmd + input_args + output_args, self.logger, cancel_event=cancel_event):
             return []
 
         generated_files = sorted(glob.glob(os.path.join(output_folder, f"ffmpeg_out_*.{ext}")))
@@ -507,6 +594,7 @@ class VideoExtractor:
                     'timestamp_sec': round(est_time, 3), 
                     'video_filename': self.video_filename,
                     'video_path': os.path.abspath(self.video_path),
+                    **({'aspect_ratio': display_aspect_ratio} if display_aspect_ratio else {}),
                 })
             except OSError as e:
                 self.logger.warning(f"Could not finalize extracted frame '{file_path}': {e}")
@@ -514,7 +602,7 @@ class VideoExtractor:
         return results
 
 # Legacy Wrappers
-def extract_frames_from_timestamps(video_path, timestamps, output_folder, logger, output_format="jpg", fast_preview=False, hdr_tonemap=False, hdr_algorithm='hable'):
+def extract_frames_from_timestamps(video_path, timestamps, output_folder, logger, output_format="jpg", fast_preview=False, hdr_tonemap=False, hdr_algorithm='hable', cancel_event=None):
     _ensure_cv2_available(logger)
     """
     Unified entry point for Grid/Manual timestamp extraction.
@@ -529,10 +617,10 @@ def extract_frames_from_timestamps(video_path, timestamps, output_folder, logger
         # We now use the optimized FFmpeg extractor for EVERYTHING.
         # It handles SDR (by not adding tone map filters) and HDR (by adding them) efficiently.
         return True, ex.extract_timestamps_optimized(
-            timestamps, output_folder, output_format, fast_preview, hdr_tonemap, hdr_algorithm
+            timestamps, output_folder, output_format, fast_preview, hdr_tonemap, hdr_algorithm, cancel_event
         )
 
-def extract_shot_boundary_frames(video_path, output_folder, logger, detector_threshold=27.0, output_format="jpg", start_time_sec=0.0, end_time_sec=None, hdr_tonemap=False, hdr_algorithm='hable'):
+def extract_shot_boundary_frames(video_path, output_folder, logger, detector_threshold=27.0, output_format="jpg", start_time_sec=0.0, end_time_sec=None, hdr_tonemap=False, hdr_algorithm='hable', cancel_event=None):
     _ensure_cv2_available(logger)
     with VideoExtractor(video_path, logger) as ex:
         return True, ex.extract_shots(
@@ -542,14 +630,14 @@ def extract_shot_boundary_frames(video_path, output_folder, logger, detector_thr
             start_time=start_time_sec or 0.0,
             end_time=end_time_sec,
             hdr_tonemap=hdr_tonemap,
-            hdr_algorithm=hdr_algorithm
+            hdr_algorithm=hdr_algorithm, cancel_event=cancel_event
         )
 
-def extract_frames(video_path, output_folder, logger, interval_seconds=None, interval_frames=None, output_format="jpg", start_time_sec=0.0, end_time_sec=None, use_gpu=False, fast_preview=False, hdr_tonemap=False, hdr_algorithm='hable'):
+def extract_frames(video_path, output_folder, logger, interval_seconds=None, interval_frames=None, output_format="jpg", start_time_sec=0.0, end_time_sec=None, use_gpu=False, fast_preview=False, hdr_tonemap=False, hdr_algorithm='hable', cancel_event=None):
     _ensure_cv2_available(logger)
     with VideoExtractor(video_path, logger) as ex:
         if not hdr_tonemap and ex.detect_hdr():
              logger.info("  [Auto-Detect] HDR content identified. Enabling Tone Mapping.")
              hdr_tonemap = True
-        meta = ex.extract_via_ffmpeg(output_folder, interval_seconds, interval_frames, output_format, use_gpu, start_time_sec, end_time_sec, fast_preview, hdr_tonemap, hdr_algorithm)
+        meta = ex.extract_via_ffmpeg(output_folder, interval_seconds, interval_frames, output_format, use_gpu, start_time_sec, end_time_sec, fast_preview, hdr_tonemap, hdr_algorithm, cancel_event)
     return True, meta
