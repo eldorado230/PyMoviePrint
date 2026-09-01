@@ -211,9 +211,15 @@ def _setup_temp_directory(video_file_path, settings, logger):
     """Handles creation of the temporary directory for frames."""
     if settings.temp_dir:
         video_basename = os.path.splitext(os.path.basename(video_file_path))[0]
-        temp_dir = os.path.join(settings.temp_dir, f"movieprint_temp_{video_basename}")
-        os.makedirs(temp_dir, exist_ok=True)
-        return temp_dir, False, None
+        try:
+            os.makedirs(settings.temp_dir, exist_ok=True)
+            temp_dir = tempfile.mkdtemp(
+                prefix=f"movieprint_temp_{video_basename}_",
+                dir=settings.temp_dir,
+            )
+            return temp_dir, True, None
+        except OSError as error:
+            return None, False, f"Error creating temporary directory: {error}"
     else:
         try:
             temp_dir = tempfile.mkdtemp(prefix=f"movieprint_{os.path.splitext(os.path.basename(video_file_path))[0]}_")
@@ -304,16 +310,25 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
 
     # 1. Manual Timestamps (from Scrubbing/GUI)
     if hasattr(settings, 'manual_timestamps') and settings.manual_timestamps:
-        logger.info(f"  Using {len(settings.manual_timestamps)} manual timestamps provided by GUI.")
+        timestamps = [
+            float(ts) for ts in settings.manual_timestamps
+            if ts is not None
+            and (start_sec is None or float(ts) >= start_sec)
+            and (end_sec is None or float(ts) <= end_sec)
+        ]
+        logger.info(f"  Using {len(timestamps)} manual timestamps provided by GUI.")
+        if not timestamps:
+            return False, []
         success, extracted = video_processing.extract_frames_from_timestamps(
             video_path=video_file_path,
-            timestamps=settings.manual_timestamps,
+            timestamps=timestamps,
             output_folder=temp_dir,
             logger=logger,
             output_format=settings.frame_format,
             fast_preview=fast_preview,
             hdr_tonemap=hdr_tonemap,
-            hdr_algorithm=hdr_algo
+            hdr_algorithm=hdr_algo,
+            cancel_event=getattr(settings, 'cancel_event', None)
         )
         if success and extracted:
             extracted = _merge_manual_thumbnail_metadata(extracted, settings, logger)
@@ -339,7 +354,8 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
                 output_format=settings.frame_format,
                 fast_preview=fast_preview,
                 hdr_tonemap=hdr_tonemap,
-                hdr_algorithm=hdr_algo
+                hdr_algorithm=hdr_algo,
+                cancel_event=getattr(settings, 'cancel_event', None)
             )
 
     # 3. Interval or Shot Mode (Fallback/Legacy)
@@ -355,7 +371,8 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
             fast_preview=fast_preview,
             logger=logger,
             hdr_tonemap=hdr_tonemap,
-            hdr_algorithm=hdr_algo
+            hdr_algorithm=hdr_algo,
+            cancel_event=getattr(settings, 'cancel_event', None)
         )
     elif settings.extraction_mode == "shot":
         return video_processing.extract_shot_boundary_frames(
@@ -364,7 +381,8 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
             start_time_sec=start_sec if start_sec is not None else 0.0, end_time_sec=end_sec,
             logger=logger,
             hdr_tonemap=hdr_tonemap,
-            hdr_algorithm=hdr_algo
+            hdr_algorithm=hdr_algo,
+            cancel_event=getattr(settings, 'cancel_event', None)
         )
     
     return False, []
@@ -528,6 +546,7 @@ def _export_individual_frames(metadata_list, output_dir, settings, logger):
     staging_dir = tempfile.mkdtemp(prefix=".pymovieprint_frames_stage_", dir=parent_dir)
     backup_dir = None
     staged_names = []
+    preserve_backup = False
 
     try:
         for idx, meta in enumerate(metadata_list, 1):
@@ -617,6 +636,7 @@ def _export_individual_frames(metadata_list, output_dir, settings, logger):
                     try:
                         os.replace(backup_path, os.path.join(output_dir, name))
                     except OSError:
+                        preserve_backup = True
                         logger.exception("Could not restore previous frame export %s", name)
             return False, f"Could not replace previous frame export: {error}"
 
@@ -627,7 +647,7 @@ def _export_individual_frames(metadata_list, output_dir, settings, logger):
         return False, f"Could not export individual frames: {error}"
     finally:
         shutil.rmtree(staging_dir, ignore_errors=True)
-        if backup_dir:
+        if backup_dir and not preserve_backup:
             shutil.rmtree(backup_dir, ignore_errors=True)
 
 
@@ -708,8 +728,19 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
     else:
         target_output_dir = os.path.dirname(os.path.abspath(video_file_path))
 
-    if not os.access(target_output_dir, os.W_OK):
-        return False, f"Cannot write to output directory: {target_output_dir}. Permission denied."
+    frame_export_base_dir = ""
+    if getattr(settings, 'output_frames_only', False):
+        frame_export_base_dir = getattr(settings, 'individual_frames_output_dir', '').strip()
+        if frame_export_base_dir:
+            frame_export_base_dir = os.path.abspath(frame_export_base_dir)
+            try:
+                os.makedirs(frame_export_base_dir, exist_ok=True)
+            except OSError as error:
+                return False, f"Cannot create frame export directory '{frame_export_base_dir}': {error}"
+
+    writable_output_dir = frame_export_base_dir or target_output_dir
+    if not os.access(writable_output_dir, os.W_OK):
+        return False, f"Cannot write to output directory: {writable_output_dir}. Permission denied."
 
     # 2. Parse Times
     start_sec = parse_time_to_seconds(settings.start_time)
@@ -740,9 +771,8 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
         # 6. Generation / Export
         if getattr(settings, 'output_frames_only', False):
             final_path = os.path.join(target_output_dir, os.path.splitext(effective_output_filename)[0] + "_frames")
-            if getattr(settings, 'individual_frames_output_dir', '').strip():
-                base_dir = os.path.abspath(getattr(settings, 'individual_frames_output_dir').strip())
-                final_path = os.path.join(base_dir, os.path.basename(final_path))
+            if frame_export_base_dir:
+                final_path = os.path.join(frame_export_base_dir, os.path.basename(final_path))
 
             overwrite_mode = getattr(settings, 'overwrite_mode', 'overwrite')
             if os.path.exists(final_path):

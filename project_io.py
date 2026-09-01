@@ -17,6 +17,15 @@ PNG_PROJECT_KEY = "pymovieprint.project"
 MAX_PROJECT_BYTES = 8 * 1024 * 1024
 
 
+def _bounded_zlib_decompress(data: bytes) -> bytes:
+    """Decompress PNG text without allowing a small chunk to expand without limit."""
+    decompressor = zlib.decompressobj()
+    result = decompressor.decompress(data, MAX_PROJECT_BYTES + 1)
+    if len(result) > MAX_PROJECT_BYTES or decompressor.unconsumed_tail or not decompressor.eof:
+        raise ValueError("Compressed PNG project metadata exceeds the supported 8 MB limit.")
+    return result
+
+
 def _validated_json(raw: str) -> Dict[str, Any]:
     if len(raw.encode("utf-8")) > MAX_PROJECT_BYTES:
         raise ValueError("Project metadata is larger than the supported 8 MB limit.")
@@ -169,13 +178,13 @@ def _png_text_chunks(path: str) -> Dict[str, str]:
                     values[keyword.decode("latin-1")] = content.decode("latin-1")
                 elif chunk_type == b"zTXt":
                     keyword, compressed = data.split(b"\0\x00", 1)
-                    values[keyword.decode("latin-1")] = zlib.decompress(compressed).decode("utf-8")
+                    values[keyword.decode("latin-1")] = _bounded_zlib_decompress(compressed).decode("utf-8")
                 elif chunk_type == b"iTXt":
                     parts = data.split(b"\0", 5)
                     if len(parts) == 6:
                         keyword, compression_flag, _method, _language, _translated, content = parts
                         if compression_flag == b"\x01":
-                            content = zlib.decompress(content)
+                            content = _bounded_zlib_decompress(content)
                         values[keyword.decode("latin-1")] = content.decode("utf-8")
             except (ValueError, UnicodeDecodeError, zlib.error):
                 continue
