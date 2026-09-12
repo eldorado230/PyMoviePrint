@@ -21,6 +21,8 @@ class ProjectSettings:
     overwrite_mode: str = "overwrite"
     output_frames_only: bool = False
     individual_frames_output_dir: str = ""
+    output_dir: str = ""
+    include_individual_frames: bool = False
 
     extraction_mode: str = "interval"
     interval_seconds: float = 5.0
@@ -31,6 +33,7 @@ class ProjectSettings:
     num_columns: int = 5
     num_rows: int = 5
     target_row_height: int = 150
+    timeline_minutes_per_row: float = 0.0
 
     fit_to_output_params: bool = False
     output_width: int = 1920
@@ -63,6 +66,7 @@ class ProjectSettings:
     filter_mode: str = "visible"
 
     show_header: bool = False
+    show_header_timeline: bool = False
     show_file_path: bool = True
     show_timecode: bool = True
     show_frame_num: bool = True
@@ -78,6 +82,7 @@ class ProjectSettings:
     frame_format: str = "jpg"
     output_quality: int = 95
     preview_quality: int = 50
+    cache_max_width: int = 0
     save_metadata_json: bool = False
 
     @classmethod
@@ -103,6 +108,7 @@ class MoviePrintSheet:
     selected_thumbnail_id: Optional[str] = None
     in_point_sec: Optional[float] = None
     out_point_sec: Optional[float] = None
+    parent_sheet_id: Optional[str] = None
 
     def clone(self, *, new_identity: bool = False):
         result = copy.deepcopy(self)
@@ -118,6 +124,8 @@ class MoviePrintSheet:
         values = values if isinstance(values, dict) else {}
         allowed = {item.name for item in fields(cls)}
         sheet = cls(**{key: value for key, value in values.items() if key in allowed})
+        if not isinstance(sheet.thumbnail_metadata, list) or not isinstance(sheet.thumbnail_layout_data, list):
+            raise ValueError("Sheet thumbnails and layout must be lists.")
         sheet.thumbnail_metadata = [dict(item) for item in sheet.thumbnail_metadata if isinstance(item, dict)]
         sheet.thumbnail_layout_data = [dict(item) for item in sheet.thumbnail_layout_data if isinstance(item, dict)]
         return sheet
@@ -144,7 +152,9 @@ class ProjectState:
             )
             self.sheets = [sheet]
             self.active_sheet_id = sheet.id
-        self.activate_sheet(self.active_sheet_id or self.sheets[0].id, save_current=False)
+        if self.active_sheet_id not in {sheet.id for sheet in self.sheets}:
+            self.active_sheet_id = self.sheets[0].id
+        self.activate_sheet(self.active_sheet_id, save_current=False)
 
     def clone(self):
         self.sync_active_sheet()
@@ -197,6 +207,8 @@ class ProjectState:
         version = int(values.get("version", 1))
         if version > PROJECT_VERSION:
             raise ValueError(f"Project version {version} is newer than this app supports.")
+        if not isinstance(values.get('sheets', []), list) or not isinstance(values.get('source_paths', []), list):
+            raise ValueError("Project sheets and sources must be lists.")
         sheets = [MoviePrintSheet.from_dict(item) for item in values.get("sheets", []) if isinstance(item, dict)]
         state = cls(
             settings=ProjectSettings.from_dict(values.get("settings")),
@@ -246,7 +258,11 @@ class StateManager:
             sheet = self._current_state.active_sheet().clone(new_identity=True)
         else:
             sheet = MoviePrintSheet(settings=asdict(self._current_state.settings))
-        sheet.name = name or f"Sheet {len(self._current_state.sheets) + 1}"
+        names = {item.name for item in self._current_state.sheets}
+        number = 1
+        while f'Sheet {number}' in names:
+            number += 1
+        sheet.name = name or f"Sheet {number}"
         self._current_state.sheets.append(sheet)
         self._current_state.activate_sheet(sheet.id)
         return sheet

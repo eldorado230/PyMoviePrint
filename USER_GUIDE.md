@@ -1,6 +1,6 @@
 # PyMoviePrint User Guide
 
-This guide is a practical, end-to-end walkthrough of PyMoviePrint for both GUI users and CLI automation users.
+Instructions for the PyMoviePrint desktop app and command line.
 
 - If you are new, read: **Concepts → GUI Quick Workflow → CLI Quick Recipes**.
 - If you are scripting, jump to: **CLI Reference**.
@@ -34,8 +34,8 @@ PyMoviePrint can detect HDR characteristics and optionally apply tone mapping so
 
 ## 2.1 Prerequisites
 
-- Python 3.8+
-- `ffmpeg` and `ffprobe` available in PATH
+- Python 3.10+
+- `ffmpeg` and `ffprobe` available in PATH; `ffplay` for audio playback
 
 ## 2.2 Install
 
@@ -65,16 +65,19 @@ python movieprint_gui.py
 
 ### 3.1 Typical Session
 
-1. Add a single file or queue multiple files/folders.
-2. Set extraction + layout settings.
-3. Click **Preview** to generate a draft.
+1. Click **Add video…** or drop a video into Single Source to start a preview. Use Batch Queue for lists of files or folders.
+2. Set extraction and layout settings.
+3. Click **Build preview** to sample the video again. Press Enter after pasting a source path.
 4. Scrub thumbnails in preview to refine specific cells.
 5. Right-click a thumbnail to hide, add, replace, save, set IN/OUT, or expand it.
 6. Use **Player** to seek the source and apply its playhead to the selected thumbnail.
 7. Add or duplicate sheets; each sheet keeps its own thumbnails and settings.
-8. Save an editable project, then click **Generate** for the full output render.
+8. Select **Save next to each video file**, or browse to a destination folder. Save an editable project if needed, then click **Export movieprint**.
 
-### 3.2 Scrubbing (high-impact feature)
+Single Source previews only the first selected video; export processes all selected videos. Adding a video asks before replacing existing frame edits.
+Use the edge arrows to hide or show either side panel. Changing colours does not reset the preview, zoom, player or queue.
+
+### 3.2 Scrubbing
 
 - Click and drag horizontally over a thumbnail in preview.
 - Drag distance maps to time offset.
@@ -84,7 +87,7 @@ python movieprint_gui.py
 
 - If drag-and-drop libraries are unavailable, the app still runs with fallback behavior.
 - Logs are written under the user profile (`~/.pymovieprint/logs`) to assist debugging.
-- Cancel stops a batch before the next video begins. The current FFmpeg extraction step is allowed to finish safely first.
+- Cancel stops further work and interrupts active FFmpeg extraction. A cancelled preview leaves the previous preview intact.
 - Fixed Name works for a recursive parent-folder batch when each source video is in a different folder. PyMoviePrint blocks only outputs that resolve to the same final path.
 
 ### 3.4 Projects, sheets, and MoviePrint imports
@@ -92,7 +95,12 @@ python movieprint_gui.py
 - **Save Project** writes a portable `*.pymovieprint.json` file containing source references, sheet settings, frame times, hidden state, transforms, and IN/OUT points.
 - GUI-generated PNG movieprints also embed that project payload and can be reopened directly.
 - **Open Project** accepts PyMoviePrint project JSON/PNG and MoviePrint 0.2.x PNG/JSON exports. Frames are reconstructed from the referenced source video, so the video must still be available.
-- Use **+**, **DUP**, and **-** beside the sheet selector to create, clone, or remove sheets.
+- Use **+ Sheet**, **Duplicate**, and **−** in the library to create, clone, or remove sheets.
+- **Sheet tools** includes renaming, EDL export, export of all sheets, automatic IN/OUT and local face matching. Right-click a frame for scene cutting, merging and exploration.
+- **Also export individual frames** saves both the contact sheet and separate frame images. **Export individual frames only** omits the contact sheet.
+- Fixed names accept `{movie}` and `{sheet}` tokens. Names cannot contain folder or drive components.
+
+Face matching downloads OpenCV models on first use and processes images locally. Treat groups as suggested matches, not confirmed identities. Automatic IN/OUT excludes leading and trailing near-black sections; review dark scenes manually.
 
 ### 3.5 Sorting, filtering, and transforms
 

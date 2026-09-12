@@ -41,6 +41,7 @@ def save_project_json(path: str, state: ProjectState) -> str:
         target += ".json"
     os.makedirs(os.path.dirname(target) or ".", exist_ok=True)
     payload = json.dumps(state.to_dict(), indent=2, ensure_ascii=False)
+    _validated_json(payload)
     temp_path = target + ".tmp"
     with open(temp_path, "w", encoding="utf-8") as handle:
         handle.write(payload)
@@ -198,7 +199,7 @@ def load_project(path: str) -> Tuple[ProjectState, str]:
     suffix = Path(source).suffix.lower()
     if suffix == ".json":
         with open(source, "r", encoding="utf-8") as handle:
-            data = _validated_json(handle.read())
+            data = _validated_json(handle.read(MAX_PROJECT_BYTES + 1))
         if data.get("format") == PROJECT_FORMAT or "sheets" in data:
             return ProjectState.from_dict(data), "pymovieprint-json"
 

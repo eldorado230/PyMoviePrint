@@ -5,7 +5,7 @@ on:
   pull_request:
 
 jobs:
-  test:
+  source-check:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -28,4 +28,4 @@ jobs:
 
       - name: Compile source files
         run: |
-          python -m py_compile image_grid.py movieprint_gui.py movieprint_maker.py project_io.py state_manager.py version.py video_processing.py
+          python -m py_compile image_grid.py movieprint_gui.py movieprint_maker.py project_io.py state_manager.py version.py video_processing.py workspace_tools.py face_analysis.py

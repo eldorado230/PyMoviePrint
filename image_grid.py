@@ -3,6 +3,7 @@ import logging
 import os
 import math
 import shutil
+import tempfile
 import platform
 from dataclasses import dataclass, field
 from typing import List, Tuple, Optional, Dict, Union, Any
@@ -13,6 +14,7 @@ from typing import List, Tuple, Optional, Dict, Union, Any
 class FontConfig:
     """Handles font settings."""
     show_header: bool = True
+    show_header_timeline: bool = False
     show_file_path: bool = True
     show_timecode: bool = True
     show_frame_num: bool = True
@@ -43,8 +45,9 @@ class GridConfig:
     # Timeline Specific
     layout_mode: str = "grid" # 'grid' or 'timeline'
     target_row_height: int = 150
+    timeline_minutes_per_row: float = 0.0
     
-    # NEW: Fixed Dimensions
+    # Fixed output dimensions
     fit_to_output_params: bool = False
     output_width: int = 1920
     output_height: int = 1080
@@ -182,6 +185,10 @@ def _prepare_image_items(image_paths, config: GridConfig):
             key=lambda value: int((value[1].get("face_detection") or {}).get("num_faces", 0)),
             reverse=True,
         )
+    elif config.sort_mode in {'face_size', 'confidence', 'occurrences', 'face_group'}:
+        key = {'face_size': 'max_face_size', 'face_group': 'group'}.get(config.sort_mode, config.sort_mode)
+        prepared.sort(key=lambda value: float((value[1].get('face_detection') or {}).get(key, 0)),
+                      reverse=config.sort_mode != 'face_group')
     return prepared
 
 def _draw_frame_info(draw, text, img_w, img_h, conf, font):
@@ -199,6 +206,7 @@ def _draw_frame_info(draw, text, img_w, img_h, conf, font):
     draw.text((x, y), text, font=font, fill=conf.font_color)
 
 def _save_image_optimized(img: Image.Image, path: str, quality: int, logger: logging.Logger) -> bool:
+    temporary = None
     try:
         ext = os.path.splitext(path)[1].lower()
         save_kwargs = {"optimize": True} 
@@ -209,11 +217,21 @@ def _save_image_optimized(img: Image.Image, path: str, quality: int, logger: log
         elif ext == ".png":
             save_kwargs["compress_level"] = 9
             
-        img.save(path, **save_kwargs)
+        fd, temporary = tempfile.mkstemp(prefix='.movieprint_', suffix=ext,
+                                         dir=os.path.dirname(os.path.abspath(path)))
+        os.close(fd)
+        img.save(temporary, **save_kwargs)
+        os.replace(temporary, path)
         return True
     except Exception as e:
         logger.error(f"Failed to save image to {path}: {e}")
         return False
+    finally:
+        if temporary and os.path.exists(temporary):
+            try:
+                os.remove(temporary)
+            except OSError:
+                logger.warning('Could not remove temporary image %s', temporary, exc_info=True)
 
 def _coerce_image_item(item: Union[str, Dict[str, Any]]) -> Tuple[str, Dict[str, Any]]:
     if isinstance(item, dict):
@@ -253,6 +271,18 @@ def _header_text(first_path: str, first_meta: Dict[str, Any], config: GridConfig
         return config.header_title
     return first_meta.get("video_filename") or os.path.basename(first_path)
 
+
+def _draw_header_timeline(draw, items, config, width):
+    if not config.font_settings.show_header_timeline:
+        return
+    times = [float(meta.get('timestamp_sec') or 0) for _path, meta in items]
+    duration = max([float(meta.get('scene_end_sec') or 0) for _path, meta in items] + times + [1.0])
+    left, right, y = config.grid_margin, width-config.grid_margin, config.grid_margin+37
+    draw.line((left, y, right, y), fill=config.font_settings.font_color, width=1)
+    for timestamp in times:
+        x = left+(right-left)*timestamp/duration
+        draw.line((x, y-3, x, y+3), fill=config.font_settings.font_color, width=2)
+
 # --- Layout Engines ---
 
 def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], config: GridConfig, logger: logging.Logger):
@@ -268,7 +298,7 @@ def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], con
     if config.fit_to_output_params:
         grid_w = config.output_width
         grid_h = config.output_height
-        effective_rows = config.rows or max(1, math.ceil(num_images / config.columns))
+        effective_rows = max(config.rows or 1, math.ceil(num_images / config.columns))
 
         # Calculate available space for thumbnails
         avail_w = grid_w - (2 * config.grid_margin) - ((config.columns - 1) * config.padding)
@@ -291,8 +321,8 @@ def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], con
         for p, _meta in image_items[:5]:
             try:
                 with Image.open(p) as img:
-                    if config.rotation in [90, 270]: w, h = img.height, img.width
-                    else: w, h = img.size
+                    w, h = _meta.get('native_width', img.width), _meta.get('native_height', img.height)
+                    if config.rotation in [90, 270]: w, h = h, w
                     max_w = max(max_w, w)
                     max_h = max(max_h, h)
             except Exception as e:
@@ -334,6 +364,7 @@ def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], con
         f = _load_font(config.font_settings.get_font_path(), 20)
         first_path, first_meta = image_items[0]
         draw.text((config.grid_margin, config.grid_margin), _header_text(first_path, first_meta, config), font=f, fill=config.font_settings.font_color)
+        _draw_header_timeline(draw, image_items, config, grid_w)
 
     current_x = config.grid_margin
     current_y = config.grid_margin + header_height
@@ -341,6 +372,10 @@ def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], con
     for i, (path, meta) in enumerate(image_items):
         try:
             with Image.open(path) as img:
+                if meta.get('native_width') and meta.get('native_height'):
+                    native_size = (int(meta['native_width']), int(meta['native_height']))
+                    if img.size != native_size:
+                        img = img.resize(native_size, Image.Resampling.LANCZOS)
                 # 1. Rotate
                 img = _apply_source_transform(img, meta, config)
                 img = img.convert("RGBA")
@@ -397,6 +432,9 @@ def _create_fixed_column_grid(image_paths: List[Union[str, Dict[str, Any]]], con
     if not layout_data:
         logger.error("No valid thumbnails could be rendered; refusing to save a blank MoviePrint.")
         return False, []
+    if len(layout_data) != len(image_items):
+        logger.error('Only %d of %d thumbnails rendered; preserving the previous output.', len(layout_data), len(image_items))
+        return False, []
     if _save_image_optimized(grid_image, config.output_path, config.quality, logger):
         return True, layout_data
     else:
@@ -444,6 +482,9 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
 
     if not items:
         return False, []
+    if len(items) != len(source_items):
+        logger.error('A timeline source is unavailable.')
+        return False, []
 
     for item in items:
         if current_row and current_row_width + item['w'] + config.padding > max_w:
@@ -453,6 +494,36 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
         current_row.append(item)
         current_row_width += item['w'] + config.padding
     if current_row: rows.append(current_row)
+
+    time_scale = float(config.timeline_minutes_per_row or 0) * 60
+    if not math.isfinite(time_scale) or (0 < time_scale < 1):
+        logger.error('Timeline scale must be zero or at least one second per row.')
+        return False, []
+    if time_scale > 0:
+        rows, current_row, elapsed = [], [], 0.0
+        try:
+            for item in items:
+                meta = item['meta']
+                duration = float(meta['scene_end_sec']) - float(meta['scene_start_sec'])
+                if not math.isfinite(duration) or duration <= 0:
+                    raise ValueError('Invalid scene duration')
+                while duration > 1e-8:
+                    if len(rows) >= 2000:
+                        raise ValueError('Timeline exceeds 2000 rows')
+                    span = min(duration, time_scale-elapsed)
+                    start_pixel = round(max_w*elapsed/time_scale)
+                    end_pixel = round(max_w*(elapsed+span)/time_scale)
+                    current_row.append(dict(item, w=max(1, end_pixel-start_pixel)))
+                    duration -= span
+                    elapsed += span
+                    if elapsed >= time_scale-1e-8:
+                        rows.append(current_row)
+                        current_row, elapsed = [], 0.0
+            if current_row:
+                rows.append(current_row)
+        except (KeyError, ValueError, TypeError):
+            logger.error('Time-scaled timelines require valid scene ranges. Build a Shot preview first.')
+            return False, []
 
     header_height = 50 if config.font_settings.show_header else 0
     render_row_h = target_h
@@ -478,19 +549,20 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
         f = _load_font(config.font_settings.get_font_path(), 20)
         first_path, first_meta = source_items[0]
         draw.text((config.grid_margin, config.grid_margin), _header_text(first_path, first_meta, config), font=f, fill=config.font_settings.font_color)
+        _draw_header_timeline(draw, source_items, config, config.output_width)
 
     y = config.grid_margin + header_height
     info_font = _load_font(config.font_settings.get_font_path(), config.font_settings.size)
 
     for row in rows:
         x = config.grid_margin
-        height_scale = render_row_h / target_h
+        height_scale = 1.0 if time_scale > 0 else render_row_h / target_h
         row_widths = [max(1, int(i['w'] * height_scale)) for i in row]
         row_content_w = sum(row_widths) + ((len(row)-1) * config.padding)
         available_w = max_w
 
         scale = 1.0
-        if row_content_w > 0 and (len(rows) == 1 or row != rows[-1] or row_content_w > available_w):
+        if time_scale <= 0 and row_content_w > 0 and (len(rows) == 1 or row != rows[-1] or row_content_w > available_w):
              scale = available_w / row_content_w
 
         for item, item_width in zip(row, row_widths):
@@ -520,11 +592,17 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
                         'source_index': item['meta'].get('source_index', item['index']),
                         'thumbnail_id': item['meta'].get('id'),
                     })
-                    x += draw_w + int(config.padding * scale)
+                    x += draw_w + (0 if time_scale > 0 else int(config.padding * scale))
             except Exception as e:
                 logger.warning(f"Failed to render timeline thumbnail '{item.get('path')}': {e}")
         y += render_row_h + config.padding
 
+    if not layout_data:
+        logger.error("No valid timeline thumbnails could be rendered.")
+        return False, []
+    if len(layout_data) != sum(len(row) for row in rows):
+        logger.error('Some timeline thumbnails failed; preserving the previous output.')
+        return False, []
     if _save_image_optimized(grid_image, config.output_path, config.quality, logger):
         return True, layout_data
     else:
@@ -533,6 +611,7 @@ def _create_timeline_grid(source_data: List[Dict[str, Any]], config: GridConfig,
 def create_image_grid(**kwargs):
     """Adapter function."""
     font_conf = FontConfig(
+        show_header_timeline=kwargs.get('show_header_timeline', False),
         show_header=kwargs.get("show_header", True),
         show_file_path=kwargs.get("show_file_path", True),
         show_timecode=kwargs.get("show_timecode", True),
@@ -567,6 +646,7 @@ def create_image_grid(**kwargs):
         target_thumb_width=kwargs.get("target_thumbnail_width"),
         layout_mode=kwargs.get("layout_mode", "grid"),
         target_row_height=kwargs.get("target_row_height", 150),
+        timeline_minutes_per_row=kwargs.get('timeline_minutes_per_row', 0),
         # New Settings
         output_width=kwargs.get("output_width", 1920), 
         output_height=kwargs.get("output_height", 1080),

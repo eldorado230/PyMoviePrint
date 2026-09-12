@@ -8,7 +8,12 @@ cd /d "%~dp0"
 echo Done.
 echo.
 echo Installing/Verifying dependencies from requirements.txt...
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
+if errorlevel 1 (
+    echo Dependency installation failed. The GUI was not launched.
+    pause
+    exit /b 1
+)
 echo.
 echo Launching PyMoviePrint GUI...
 echo If the GUI does not start, please check for any error messages above.

@@ -97,18 +97,27 @@ def get_effective_output_filename(video_path, settings):
     if getattr(settings, 'output_naming_mode', 'suffix') == 'custom':
         custom_name = getattr(settings, 'output_filename', '').strip()
         if custom_name:
+            for token, value in {'{movie}': os.path.splitext(os.path.basename(video_path))[0],
+                                 '{sheet}': getattr(settings, 'sheet_name', 'movieprint')}.items():
+                custom_name = custom_name.replace(token, value)
             if (
                 os.path.isabs(custom_name)
                 or ntpath.isabs(custom_name)
                 or ntpath.splitdrive(custom_name)[0]
                 or '/' in custom_name
                 or '\\' in custom_name
+                or any(char in custom_name for char in ':<>"|?*')
+                or any(ord(char) < 32 for char in custom_name)
+                or custom_name in {'.', '..'}
                 or os.path.basename(custom_name) != custom_name
             ):
                 raise ValueError(
                     "Custom output name must be a plain filename without folder or drive components."
                 )
             base_name, ext = os.path.splitext(custom_name)
+            device_name = custom_name.split('.')[0].upper()
+            if device_name in {'CON', 'PRN', 'AUX', 'NUL'} or re.fullmatch(r'(COM|LPT)[1-9]', device_name):
+                raise ValueError('Custom output name is a reserved Windows filename.')
             if ext.lower() in ['.png', '.jpg', '.jpeg']:
                 output_print_format = ext.lower().replace('.', '').replace('jpeg', 'jpg')
                 custom_name = base_name
@@ -116,6 +125,8 @@ def get_effective_output_filename(video_path, settings):
 
     base = os.path.splitext(os.path.basename(video_path))[0]
     suffix = getattr(settings, 'output_filename_suffix', '_movieprint')
+    if any(char in suffix for char in '/\\:<>"|?*') or any(ord(char) < 32 for char in suffix):
+        raise ValueError("Output suffix must not contain folder or drive components.")
     return f"{base}{suffix}.{output_print_format}"
 
 def get_target_output_path(video_path, settings, effective_output_filename=None):
@@ -146,6 +157,13 @@ def find_output_path_collisions(video_files, settings):
         key = os.path.normcase(os.path.abspath(output_path))
         outputs_by_key.setdefault(key, {'output': output_path, 'videos': []})
         outputs_by_key[key]['videos'].append(video_path)
+        if getattr(settings, 'include_individual_frames', False) and not getattr(settings, 'output_frames_only', False):
+            frame_settings = argparse.Namespace(**vars(settings))
+            frame_settings.output_frames_only = True
+            frame_path = get_target_output_path(video_path, frame_settings)
+            frame_key = os.path.normcase(os.path.abspath(frame_path))
+            outputs_by_key.setdefault(frame_key, {'output': frame_path, 'videos': []})
+            outputs_by_key[frame_key]['videos'].append(video_path)
 
     return [group for group in outputs_by_key.values() if len(group['videos']) > 1]
 
@@ -188,7 +206,8 @@ def enforce_max_filesize(image_path, target_kb, logger):
                 elif ext == ".png":
                     save_kwargs["compress_level"] = 9
                     
-                img_resized.save(image_path, **save_kwargs)
+                if not image_grid._save_image_optimized(img_resized, image_path, quality, logger):
+                    return
                 img_resized.close()
                 
                 current_kb = os.path.getsize(image_path) / 1024.0
@@ -309,7 +328,7 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
     hdr_algo = getattr(settings, 'hdr_algorithm', 'hable')
 
     # 1. Manual Timestamps (from Scrubbing/GUI)
-    if hasattr(settings, 'manual_timestamps') and settings.manual_timestamps:
+    if getattr(settings, 'manual_timestamps', None) is not None:
         timestamps = [
             float(ts) for ts in settings.manual_timestamps
             if ts is not None
@@ -335,7 +354,7 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
         return success, extracted
 
     # 2. Grid Mode (Calculated Timestamps)
-    if settings.layout_mode == "grid" and getattr(settings, 'columns', None) and getattr(settings, 'rows', None):
+    if settings.extraction_mode == 'interval' and settings.layout_mode == "grid" and getattr(settings, 'columns', None) and getattr(settings, 'rows', None):
         logger.info("  Layout is Grid: Calculating exact timestamps for extraction.")
         
         duration = _get_video_duration(video_file_path, logger)
@@ -406,6 +425,8 @@ def _apply_exclusions(metadata_list, settings, logger):
     return metadata_list, excluded_items_log
 
 def _limit_frames_for_grid(metadata_list, settings, temp_dir, cleanup_temp, logger):
+    if getattr(settings, 'manual_timestamps', None) is not None:
+        return metadata_list
     """Limits the number of frames for the grid layout if max_frames is set."""
     if settings.layout_mode != "grid" or not hasattr(settings, 'max_frames_for_print') or \
             settings.max_frames_for_print is None or len(metadata_list) <= settings.max_frames_for_print:
@@ -469,7 +490,7 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
     """Generates the final image using image_grid."""
     items_for_grid = []
     for meta in metadata_list:
-        if settings.layout_mode == "timeline" and float(meta.get('duration_frames') or 0) <= 0:
+        if settings.layout_mode == "timeline" and 'duration_frames' in meta and float(meta.get('duration_frames') or 0) <= 0:
             continue
         item = dict(meta)
         item['image_path'] = meta['frame_path']
@@ -485,7 +506,8 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
         'output_path': output_path,
         'padding': settings.padding, 
         'background_color_hex': settings.background_color,
-        'layout_mode': settings.layout_mode, 
+        'layout_mode': settings.layout_mode,
+        'timeline_minutes_per_row': getattr(settings, 'timeline_minutes_per_row', 0),
         'logger': logger,
         'grid_margin': settings.grid_margin,
         'rounded_corners': settings.rounded_corners,
@@ -499,6 +521,7 @@ def _generate_movieprint(metadata_list, settings, output_path, logger):
         'filter_mode': getattr(settings, 'filter_mode', 'visible'),
         'frame_info_show': settings.frame_info_show,
         'show_header': settings.show_header,
+        'show_header_timeline': getattr(settings, 'show_header_timeline', False),
         'show_file_path': settings.show_file_path,
         'show_timecode': settings.show_timecode,
         'show_frame_num': settings.show_frame_num,
@@ -659,7 +682,11 @@ def _is_generated_frame_name(name):
     ))
 
 def _clear_generated_frame_files(output_dir, logger):
-    """Remove only PyMoviePrint-generated files from an existing frame-export folder."""
+    """Legacy cleanup helper; generation uses transactional _export_individual_frames.
+
+    Retained for callers of older versions. Do not use before an export: that
+    would discard the existing result before its replacement has succeeded.
+    """
     if not os.path.isdir(output_dir):
         return False, f"Frame export target exists but is not a folder: {output_dir}"
 
@@ -814,6 +841,15 @@ def process_single_video(video_file_path, settings, effective_output_filename, l
         if getattr(settings, 'save_metadata_json', False):
             _save_metadata(metadata_list, layout_data, settings, start_sec, end_sec, process_warnings, final_path, logger, source_video_path=video_file_path)
 
+        if getattr(settings, 'include_individual_frames', False):
+            frame_settings = argparse.Namespace(**vars(settings))
+            frame_settings.output_frames_only = True
+            frame_path = get_target_output_path(video_file_path, frame_settings, effective_output_filename)
+            if not (getattr(settings, 'overwrite_mode', 'overwrite') == 'skip' and os.path.exists(frame_path)):
+                frames_ok, detail = _export_individual_frames(metadata_list, frame_path, settings, logger)
+                if not frames_ok:
+                    return False, f'Movieprint saved to {final_path}, but individual frames failed: {detail}'
+
         return True, final_path
 
     finally:
@@ -892,6 +928,7 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
 
             if overwrite_mode == 'skip' and os.path.exists(full_output_path):
                 logger.info(f"Skipping {video_path} (Output exists: {effective_output_name})")
+                settings.skipped_count = getattr(settings, 'skipped_count', 0) + 1
                 continue
 
             success, message_or_path = process_single_video(
@@ -903,6 +940,8 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
             logger.exception(f"CRITICAL ERROR processing {video_path}: {e}")
             failed_ops.append({'video': video_path, 'reason': str(e)})
 
+    if _is_cancelled(settings):
+        settings.cancelled = True
     if progress_callback: progress_callback(total_videos, total_videos, "Batch completed")
     return successful_ops, failed_ops
 
@@ -950,7 +989,7 @@ def main():
     lay_grp.add_argument("--max_frames_for_print", type=int, default=None)
     lay_grp.add_argument("--target_row_height", type=int, default=100)
     
-    # NEW: Dimensions
+    # Output dimensions
     lay_grp.add_argument("--fit_to_output_params", action="store_true")
     lay_grp.add_argument("--output_width", type=int, default=1920)
     lay_grp.add_argument("--output_height", type=int, default=1080)

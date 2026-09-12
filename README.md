@@ -1,6 +1,6 @@
 # PyMoviePrint
 
-PyMoviePrint generates high-quality **movie prints** (contact sheets / thumbnail indexes) from video files.
+PyMoviePrint creates contact sheets from video files.
 It ships with both:
 
 - a desktop GUI (`movieprint_gui.py`) for interactive workflows, and
@@ -20,7 +20,9 @@ Compared to simple “every N seconds” contact-sheet scripts, it adds:
 - **HDR-aware processing**: optional tone mapping for cleaner SDR outputs from HDR sources.
 - **Usable GUI workflow**: preview, iterative tuning, and per-thumbnail scrubbing.
 - **Editable workspaces**: project round-tripping, multiple sheets, and embedded PNG project data.
-- **Focused frame editing**: hide/add/replace/save frames, IN/OUT points, sorting, and filtering.
+- **Frame editing**: hide, add, replace and save frames; cut and merge scenes; set IN/OUT points; sort and reorder thumbnails.
+- **Workspace tools**: source library, collapsible side panels, scene exploration, EDL export and export of all sheets.
+- **Local face matching**: group similar faces and find their occurrences across a sheet.
 - **Integrated player and transforms**: seek video beside the sheet, then crop, rotate, or constrain aspect ratio.
 - **Automation-first CLI**: deterministic output settings for batch pipelines.
 
@@ -55,8 +57,8 @@ Compared to simple “every N seconds” contact-sheet scripts, it adds:
 ## Installation
 
 ### 1) Requirements
-- Python **3.8+**
-- FFmpeg + ffprobe in `PATH`
+- Python **3.10+**
+- FFmpeg + ffprobe in `PATH`; FFplay for audio playback
 
 ### 2) Setup
 
@@ -85,12 +87,17 @@ python movieprint_gui.py
 ```
 
 Recommended GUI flow:
-1. Add source file(s).
-2. Click **Preview** for a draft render.
+1. Click **Add video…** or drop a video into **Single Source**. A preview starts automatically.
+2. Adjust settings and click **Build preview** to resample the video. Pasted paths can be previewed with Enter.
 3. Scrub specific thumbnails by click-dragging, or right-click for the full edit menu.
 4. Use **Player** to seek and replace the selected thumbnail precisely.
 5. Add or duplicate sheets and tune layout/styling/transforms per sheet.
-6. Save an editable `*.pymovieprint.json` project, then click **Generate** for final output.
+6. Choose **Save next to each video file** or browse to an output folder. Click **Export movieprint** to save the result.
+
+**Open project…** opens saved work, not a new video. **Save project** writes an editable `*.pymovieprint.json` file.
+The arrows beside the preview hide or show the side panels. Theme changes preserve the workspace.
+
+For multiple videos, use **Batch Queue** to add files or folders. Single Source also accepts multiple files, but previews only the first; export processes all selected files. Colliding output names are blocked before generation.
 
 PNG outputs created by the GUI contain compressed project metadata and can be reopened with **Open Project**. The importer also understands MoviePrint 0.2.x PNG/JSON frame lists when their source video is available.
 
@@ -144,7 +151,8 @@ python movieprint_maker.py ./dailies ./out --recursive_scan --overwrite_mode ski
 
 - FFmpeg availability is critical; most extraction paths rely on it.
 - Shot mode depends on PySceneDetect support in the environment.
-- HDR tone mapping in shot mode is currently limited compared with interval/timestamp extraction workflows.
+- PQ and HLG inputs use their respective transfer characteristics for HDR tone mapping. Check the result against the source when colour accuracy matters.
+- Face matching runs locally. Its first use downloads approximately 39 MB of OpenCV models into `~/.pymovieprint/models`. Suggested groups are not guaranteed identities.
 - For best deterministic outputs in automation, pin explicit values (rows/columns, dimensions, naming, overwrite mode).
 
 ---

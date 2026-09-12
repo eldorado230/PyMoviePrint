@@ -13,13 +13,16 @@ import math
 import json
 import sys
 import time
+import threading
+import tempfile
+import re
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import List, Dict, Any, Optional, Tuple, Union
 
 # --- Optional Dependency Handling ---
 try:
-    from scenedetect import open_video, SceneManager, FrameTimecode
+    from scenedetect import open_video, SceneManager, FrameTimecode, StatsManager
     from scenedetect.detectors import ContentDetector
     SCENEDETECT_AVAILABLE = True
 except ImportError:
@@ -116,7 +119,7 @@ class VideoUtils:
 
     @staticmethod
     def run_ffmpeg_command_with_control(cmd: List[str], logger: logging.Logger,
-                                        cancel_event=None, timeout: Optional[float] = None) -> bool:
+                                        cancel_event=None, timeout: Optional[float] = None, captured_output=None) -> bool:
         process = None
         try:
             process = subprocess.Popen(
@@ -128,7 +131,9 @@ class VideoUtils:
                 if cancel_event is not None and cancel_event.is_set():
                     process.terminate()
                     try: process.wait(timeout=5)
-                    except subprocess.TimeoutExpired: process.kill()
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    process.communicate()
                     logger.info("FFmpeg cancelled. Command: %s", ' '.join(cmd))
                     return False
                 remaining = deadline - time.monotonic()
@@ -142,6 +147,9 @@ class VideoUtils:
                 except subprocess.TimeoutExpired:
                     continue
             if process.returncode == 0:
+                if captured_output is not None:
+                    captured_output['stdout'] = stdout
+                    captured_output['stderr'] = stderr
                 return True
             err_msg = (stderr or b'').decode('utf-8', errors='replace') if isinstance(stderr, bytes) else str(stderr or '')
             logger.error("FFmpeg failed.\nCommand: %s\nError tail: %s", ' '.join(cmd), "\n".join(err_msg.splitlines()[-10:]))
@@ -149,6 +157,11 @@ class VideoUtils:
         except Exception as e:
             logger.error("Execution error: %s", e)
             return False
+        finally:
+            if process is not None:
+                if process.poll() is None:
+                    process.kill()
+                process.communicate()
 
 
 class VideoExtractor:
@@ -235,7 +248,7 @@ class VideoExtractor:
     def detect_hdr(self) -> bool:
         """
         Detects if video is HDR based on color transfer/primaries.
-        FIX: Removed 'Main 10' assumption to avoid false positives on 10-bit SDR.
+        A Main 10 profile alone does not distinguish HDR from 10-bit SDR.
         """
         if self._is_hdr_confirmed is not None:
             return self._is_hdr_confirmed
@@ -291,6 +304,10 @@ class VideoExtractor:
         return 'SDR'
 
     def extract_single_frame(self, timestamp_sec: float) -> Optional[Any]:
+        if self.detect_hdr():
+            with tempfile.TemporaryDirectory(prefix='movieprint_hdr_edit_') as directory:
+                frames = self.extract_timestamps_optimized([timestamp_sec], directory, hdr_tonemap=True)
+                return cv2.imread(frames[0]['frame_path']) if frames else None
         cap = self._cap
         local_open = False
         if not cap or not cap.isOpened():
@@ -367,6 +384,8 @@ class VideoExtractor:
         hdr_filters = self._build_hdr_filter_chain(hdr_algorithm, hdr_type) if hdr_tonemap else ""
         
         def extract_one(i, ts):
+            if cancel_event is not None and cancel_event.is_set():
+                return None
             if not fast_preview:
                 self.logger.info(f"  ... Extracting frame {i+1}/{total_frames} at {ts:.2f}s ...")
 
@@ -447,7 +466,7 @@ class VideoExtractor:
 
     def extract_shots(self, output_folder: str, threshold: float = 27.0, ext: str = "jpg",
                       start_time: float = 0.0, end_time: Optional[float] = None,
-                      hdr_tonemap: bool = False, hdr_algorithm: str = 'hable') -> List[Dict[str, Any]]:
+                      hdr_tonemap: bool = False, hdr_algorithm: str = 'hable', cancel_event=None) -> List[Dict[str, Any]]:
         if not SCENEDETECT_AVAILABLE:
             self.logger.error("PySceneDetect not installed.")
             return []
@@ -458,25 +477,45 @@ class VideoExtractor:
         try:
             self.logger.info("  Running shot detection (PySceneDetect)...")
             video_manager = open_video(self.video_path)
-            scene_manager = SceneManager()
+            stats = StatsManager()
+            scene_manager = SceneManager(stats_manager=stats)
             scene_manager.add_detector(ContentDetector(threshold=threshold))
-            scene_manager.detect_scenes(video=video_manager)
+            def check_cancel(frame, frame_num):
+                if cancel_event is not None and cancel_event.is_set():
+                    scene_manager.stop()
+            detection_finished = threading.Event()
+            def monitor_cancel():
+                while not detection_finished.wait(0.05):
+                    if cancel_event is not None and cancel_event.is_set():
+                        scene_manager.stop()
+                        return
+            watcher = threading.Thread(target=monitor_cancel, daemon=True)
+            watcher.start()
+            try:
+                scene_manager.detect_scenes(video=video_manager, callback=check_cancel)
+            finally:
+                detection_finished.set()
+                watcher.join()
+            if cancel_event is not None and cancel_event.is_set():
+                return []
             
             scenes = scene_manager.get_scene_list(start_in_scene=True)
             self.logger.info(f"  Detected {len(scenes)} shots.")
             
             for i, (start, end) in enumerate(scenes):
-                timestamp_sec = start.get_seconds()
-                if timestamp_sec < start_time:
+                range_start = max(start.get_seconds(), start_time)
+                range_end = min(end.get_seconds(), end_time) if end_time is not None else end.get_seconds()
+                if range_start >= range_end:
                     continue
-                if end_time is not None and timestamp_sec >= end_time:
-                    continue
+                timestamp_sec = (range_start + range_end) / 2
 
                 detected_shots.append({
                     'index': i,
                     'timestamp_sec': timestamp_sec,
-                    'frame_number': start.get_frames(),
-                    'duration_frames': end.get_frames() - start.get_frames()
+                    'frame_number': round(timestamp_sec*self.properties[0]),
+                    'duration_frames': round((range_end-range_start)*self.properties[0]),
+                    'scene_start_sec': range_start, 'scene_end_sec': range_end,
+                    'boundary_score': float(stats.get_metrics(start.get_frames(), ['content_val'])[0] or 0)
                 })
         except Exception as e:
             self.logger.error(f"Shot detection error: {e}")
@@ -497,7 +536,8 @@ class VideoExtractor:
             ext=ext,
             fast_preview=False,
             hdr_tonemap=hdr_tonemap,
-            hdr_algorithm=hdr_algorithm
+            hdr_algorithm=hdr_algorithm,
+            cancel_event=cancel_event
         )
         
         final_results = []
@@ -508,6 +548,9 @@ class VideoExtractor:
             meta = meta_map.get(ts_key)
             if meta:
                 meta['duration_frames'] = shot['duration_frames']
+                meta['scene_start_sec'] = shot['scene_start_sec']
+                meta['scene_end_sec'] = shot['scene_end_sec']
+                meta['boundary_score'] = shot['boundary_score']
                 final_results.append(meta)
         
         return final_results
@@ -529,6 +572,8 @@ class VideoExtractor:
         if fps <= 0: fps = 24.0
         display_aspect_ratio = self.display_aspect_ratio
 
+        if interval_sec is None and interval_frames is None:
+            interval_sec = 1.0
         filters = []
         use_variable_frame_rate = False
         if interval_sec: filters.append(f"fps=1/{interval_sec:.5f}")
@@ -602,6 +647,31 @@ class VideoExtractor:
         return results
 
 # Legacy Wrappers
+def detect_content_range(video_path, logger, cancel_event=None):
+    """Suggest IN/OUT by excluding leading/trailing near-black sections."""
+    with VideoExtractor(video_path, logger) as extractor:
+        fps, duration, _ = extractor.properties
+    output = {}
+    command = [FFMPEG_BIN, '-hide_banner', '-i', video_path, '-vf',
+               'scale=320:-2,blackdetect=d=0.1:pix_th=0.1:pic_th=0.98', '-an', '-f', 'null', '-']
+    if not VideoUtils.run_ffmpeg_command_with_control(command, logger, cancel_event, 600, output):
+        if cancel_event is not None and cancel_event.is_set():
+            raise InterruptedError('Automatic IN/OUT cancelled.')
+        raise ValueError('Could not analyse the video for automatic IN/OUT.')
+    log_text = output.get('stderr', b'').decode('utf-8', errors='replace')
+    intervals = [(float(a), float(b)) for a, b in re.findall(r'black_start:([\d.]+)\s+black_end:([\d.]+)', log_text)]
+    start, end = 0.0, duration
+    tolerance = 2/max(fps, 1)
+    for a, b in intervals:
+        if a <= tolerance:
+            start = max(start, b)
+        if b >= duration-tolerance:
+            end = min(end, a)
+    if start >= end:
+        raise ValueError('No non-black section was found. Set IN/OUT manually.')
+    return start, end
+
+
 def extract_frames_from_timestamps(video_path, timestamps, output_folder, logger, output_format="jpg", fast_preview=False, hdr_tonemap=False, hdr_algorithm='hable', cancel_event=None):
     _ensure_cv2_available(logger)
     """
@@ -616,9 +686,10 @@ def extract_frames_from_timestamps(video_path, timestamps, output_folder, logger
         
         # We now use the optimized FFmpeg extractor for EVERYTHING.
         # It handles SDR (by not adding tone map filters) and HDR (by adding them) efficiently.
-        return True, ex.extract_timestamps_optimized(
+        result = ex.extract_timestamps_optimized(
             timestamps, output_folder, output_format, fast_preview, hdr_tonemap, hdr_algorithm, cancel_event
         )
+        return bool(result) and len(result) == len(timestamps), result
 
 def extract_shot_boundary_frames(video_path, output_folder, logger, detector_threshold=27.0, output_format="jpg", start_time_sec=0.0, end_time_sec=None, hdr_tonemap=False, hdr_algorithm='hable', cancel_event=None):
     _ensure_cv2_available(logger)
