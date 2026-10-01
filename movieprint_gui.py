@@ -111,58 +111,67 @@ ctk.set_appearance_mode("Dark")
 class Theme:
     PRESETS = {
         "Teal": {
-            "BG_PRIMARY": "#242A2E",
-            "BG_SECONDARY": "#2B3237",
-            "BG_TERTIARY": "#414D54",
-            "PANEL": "#303A40",
-            "PANEL_SOFT": "#37434A",
-            "ACCENT_BLUE": "#83B5B0",
-            "ACCENT_BLUE_HOVER": "#96C4BF",
-            "ACCENT_GREEN": "#608F89",
-            "ACCENT_GREEN_HOVER": "#719F99",
-            "ACTION_GOLD": "#A1C7BF",
-            "ACTION_GOLD_HOVER": "#B2D3CD",
+            "BG_PRIMARY": "#181818",
+            "BG_SECONDARY": "#1C1B1A",
+            "BG_TERTIARY": "#454443",
+            "PANEL": "#242322",
+            "PANEL_SOFT": "#363636",
+            "ACCENT_BLUE": "#38C9B0",
+            "ACCENT_BLUE_HOVER": "#62DEC8",
+            "ACCENT_GREEN": "#126A5D",
+            "ACCENT_GREEN_HOVER": "#187F70",
+            "ACTION_GOLD": "#41CBB2",
+            "ACTION_GOLD_HOVER": "#67DEC8",
             "DANGER_RED": "#B67F83",
             "DANGER_RED_HOVER": "#C69094",
-            "TEXT_MUTED": "#B5C0C5",
+            "TEXT_MUTED": "#B5B3B1",
         },
         "Yellow": {
-            "BG_PRIMARY": "#2C2925",
-            "BG_SECONDARY": "#34312C",
-            "BG_TERTIARY": "#504A40",
-            "PANEL": "#3B3730",
-            "PANEL_SOFT": "#454037",
-            "ACCENT_BLUE": "#C7B28A",
-            "ACCENT_BLUE_HOVER": "#D4C19F",
-            "ACCENT_GREEN": "#978365",
-            "ACCENT_GREEN_HOVER": "#AA9777",
-            "ACTION_GOLD": "#D2BF99",
-            "ACTION_GOLD_HOVER": "#DFCEAF",
+            "BG_PRIMARY": "#181818",
+            "BG_SECONDARY": "#1C1B1A",
+            "BG_TERTIARY": "#454443",
+            "PANEL": "#242322",
+            "PANEL_SOFT": "#363636",
+            "ACCENT_BLUE": "#F2BD46",
+            "ACCENT_BLUE_HOVER": "#FFD16A",
+            "ACCENT_GREEN": "#785300",
+            "ACCENT_GREEN_HOVER": "#926800",
+            "ACTION_GOLD": "#F1C052",
+            "ACTION_GOLD_HOVER": "#FFD474",
             "DANGER_RED": "#BA8580",
             "DANGER_RED_HOVER": "#CC9791",
-            "TEXT_MUTED": "#C2BBAF",
+            "TEXT_MUTED": "#B5B3B1",
         },
         "Dark Green": {
-            "BG_PRIMARY": "#262C28",
-            "BG_SECONDARY": "#2E3630",
-            "BG_TERTIARY": "#475249",
-            "PANEL": "#343F37",
-            "PANEL_SOFT": "#3D4940",
-            "ACCENT_BLUE": "#A1B8A1",
-            "ACCENT_BLUE_HOVER": "#B2C8B1",
-            "ACCENT_GREEN": "#738F77",
-            "ACCENT_GREEN_HOVER": "#85A087",
-            "ACTION_GOLD": "#B3C9AE",
-            "ACTION_GOLD_HOVER": "#C3D6BD",
+            "BG_PRIMARY": "#181818",
+            "BG_SECONDARY": "#1C1B1A",
+            "BG_TERTIARY": "#454443",
+            "PANEL": "#242322",
+            "PANEL_SOFT": "#363636",
+            "ACCENT_BLUE": "#66CE83",
+            "ACCENT_BLUE_HOVER": "#89DF9F",
+            "ACCENT_GREEN": "#276D3A",
+            "ACCENT_GREEN_HOVER": "#328448",
+            "ACTION_GOLD": "#75D58E",
+            "ACTION_GOLD_HOVER": "#96E3AA",
             "DANGER_RED": "#B78383",
             "DANGER_RED_HOVER": "#C89393",
-            "TEXT_MUTED": "#B7C2B8",
+            "TEXT_MUTED": "#B5B3B1",
         },
+    }
+    PRESETS["Purple"] = {
+        **PRESETS["Teal"],
+        "ACCENT_BLUE": "#AE80F0",
+        "ACCENT_BLUE_HOVER": "#C39CFB",
+        "ACCENT_GREEN": "#4E2F88",
+        "ACCENT_GREEN_HOVER": "#63409F",
+        "ACTION_GOLD": "#AF82EE",
+        "ACTION_GOLD_HOVER": "#C69FFA",
     }
     PRESET_NAMES = list(PRESETS.keys())
     CURRENT = "Teal"
 
-    TEXT_MAIN = "#E3E7E9"
+    TEXT_MAIN = "#ECEBEA"
     TEXT_DARK = "#020707"
     BUTTON_SUBTLE = "#142020"
     BUTTON_SUBTLE_HOVER = "#1C3030"
@@ -181,10 +190,38 @@ class Theme:
             setattr(cls, key, value)
         cls.TEXT_DARK = cls.BG_PRIMARY
         cls.BUTTON_SUBTLE = cls.BG_TERTIARY
-        cls.BUTTON_SUBTLE_HOVER = cls.PANEL_SOFT
+        cls.BUTTON_SUBTLE_HOVER = "#514F4E"
+        ctk.ThemeManager.theme['CTkFrame'].update(
+            fg_color=cls.PANEL, top_fg_color=cls.PANEL_SOFT, border_color=cls.BG_TERTIARY)
         ctk.ThemeManager.theme['CTkButton'].update(
             fg_color=cls.BUTTON_SUBTLE, hover_color=cls.BUTTON_SUBTLE_HOVER, text_color=cls.TEXT_MAIN)
         ctk.ThemeManager.theme['CTkLabel']['text_color'] = cls.TEXT_MAIN
+        ctk.ThemeManager.theme['CTkEntry'].update(
+            fg_color=cls.BG_PRIMARY, border_color=cls.BG_TERTIARY,
+            text_color=cls.TEXT_MAIN, placeholder_text_color=cls.TEXT_MUTED)
+        ctk.ThemeManager.theme['CTkComboBox'].update(
+            fg_color=cls.BG_PRIMARY, border_color=cls.BG_TERTIARY,
+            button_color=cls.BG_TERTIARY, button_hover_color=cls.BUTTON_SUBTLE_HOVER,
+            text_color=cls.TEXT_MAIN, text_color_disabled=cls.TEXT_MUTED)
+        ctk.ThemeManager.theme['DropdownMenu'].update(
+            fg_color=cls.PANEL, hover_color=cls.BG_TERTIARY, text_color=cls.TEXT_MAIN)
+        ctk.ThemeManager.theme['CTkSlider'].update(
+            fg_color=cls.BG_TERTIARY, progress_color=cls.ACCENT_BLUE,
+            button_color=cls.ACCENT_BLUE, button_hover_color=cls.ACCENT_BLUE_HOVER)
+        ctk.ThemeManager.theme['CTkSwitch'].update(
+            fg_color=cls.BG_TERTIARY, progress_color=cls.ACCENT_GREEN,
+            button_color=cls.TEXT_MAIN, button_hover_color=cls.TEXT_MAIN,
+            text_color=cls.TEXT_MAIN, text_color_disabled=cls.TEXT_MUTED)
+        ctk.ThemeManager.theme['CTkCheckBox'].update(
+            fg_color=cls.ACCENT_GREEN, hover_color=cls.ACCENT_GREEN_HOVER,
+            border_color=cls.TEXT_MUTED, checkmark_color=cls.TEXT_MAIN,
+            text_color=cls.TEXT_MAIN, text_color_disabled=cls.TEXT_MUTED)
+        ctk.ThemeManager.theme['CTkSegmentedButton'].update(
+            fg_color=cls.BG_PRIMARY, selected_color=cls.ACCENT_GREEN,
+            selected_hover_color=cls.ACCENT_GREEN_HOVER, unselected_color=cls.PANEL_SOFT,
+            unselected_hover_color=cls.BG_TERTIARY, text_color=cls.TEXT_MAIN)
+        ctk.ThemeManager.theme['CTkProgressBar'].update(
+            fg_color=cls.BG_TERTIARY, progress_color=cls.ACCENT_BLUE)
 
 Theme.apply_preset("Teal")
 
@@ -688,6 +725,7 @@ class VideoPlayerWindow(ctk.CTkToplevel):
 
 class CTkCollapsibleFrame(ctk.CTkFrame):
     def __init__(self, master, title="", start_open=True, **kwargs):
+        kwargs.setdefault('fg_color', Theme.PANEL)
         super().__init__(master, **kwargs)
         self.grid_columnconfigure(0, weight=1)
         self.variable = ctk.BooleanVar(value=start_open)
@@ -951,26 +989,28 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.toolbar_frame = ctk.CTkFrame(self, fg_color=Theme.BG_PRIMARY)
         self.toolbar_frame.grid(row=1, column=1, sticky="ew", padx=16, pady=(12, 10))
         project_row = ctk.CTkFrame(self.toolbar_frame, fg_color="transparent")
+        self.project_toolbar_row = project_row
         project_row.pack(fill="x")
-        ctk.CTkLabel(project_row, text="Sheet:", text_color=Theme.TEXT_MUTED).pack(side="left", padx=(8, 3))
+        ctk.CTkLabel(project_row, text="Sheet:", text_color=Theme.TEXT_MUTED).grid(row=0, column=0, padx=(8, 3))
         self.sheet_display_var = tk.StringVar(value="Sheet 1")
         self.sheet_combo = ctk.CTkComboBox(
             project_row, width=150, variable=self.sheet_display_var,
             values=["Sheet 1"], command=self._on_sheet_selected,
         )
-        self.sheet_combo.pack(side="left", padx=3)
+        self.sheet_combo.grid(row=0, column=1, padx=3)
 
-        ctk.CTkLabel(project_row, text="Sort:", text_color=Theme.TEXT_MUTED).pack(side="left", padx=(12, 3))
+        ctk.CTkLabel(project_row, text="Sort:", text_color=Theme.TEXT_MUTED).grid(row=0, column=2, padx=(12, 3))
         self.sort_combo = ctk.CTkComboBox(
             project_row, width=125, values=["timestamp", "timestamp_desc", "frame", "duration", "faces", "face_size", "confidence", "occurrences", "face_group", "manual"],
             variable=self.sort_mode_var, command=lambda _value: self.quick_refresh_layout(),
         )
-        self.sort_combo.pack(side="left", padx=3)
+        self.sort_combo.grid(row=0, column=3, padx=3)
         self.hidden_switch = ctk.CTkSwitch(
             project_row, text="Show hidden", command=self._toggle_hidden_filter,
             progress_color=Theme.ACCENT_GREEN,
         )
-        self.hidden_switch.pack(side="left", padx=8)
+        self.hidden_switch.grid(row=0, column=4, padx=8, sticky='w')
+        project_row.bind('<Configure>', self._layout_project_toolbar)
 
         zoom_row = ctk.CTkFrame(self.toolbar_frame, fg_color="transparent")
         zoom_row.pack(fill="x", pady=(3, 0))
@@ -989,6 +1029,15 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             text_color=Theme.TEXT_MUTED, anchor='w', justify='left', wraplength=420)
         self.editing_hint.pack(fill='x', padx=8, pady=(5, 0))
         self._refresh_sheet_controls()
+
+    def _layout_project_toolbar(self, event):
+        row = self.project_toolbar_row
+        required = sum(child.winfo_reqwidth() for child in row.winfo_children())
+        required += row._apply_widget_scaling(48)
+        if event.width < required:
+            self.hidden_switch.grid_configure(row=1, column=0, columnspan=4, pady=(4, 0))
+        else:
+            self.hidden_switch.grid_configure(row=0, column=4, columnspan=1, pady=0)
 
     def _build_action_footer(self):
         self.action_frame = ctk.CTkFrame(self, height=60, fg_color=Theme.BG_SECONDARY)
@@ -1107,8 +1156,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
         parent = self.sidebar_frame
         self.input_tabs = ctk.CTkTabview(parent, height=180, fg_color=Theme.PANEL, text_color=Theme.TEXT_MAIN,
-                                         segmented_button_selected_color=Theme.ACCENT_BLUE,
-                                         segmented_button_selected_hover_color=Theme.ACCENT_BLUE_HOVER,
+                                         segmented_button_selected_color=Theme.ACCENT_GREEN,
+                                         segmented_button_selected_hover_color=Theme.ACCENT_GREEN_HOVER,
                                          command=self._on_tab_change)
         self.input_tabs.pack(fill="x", padx=10, pady=(0, 5))
         self.input_tabs.add("Single Source")
@@ -1225,8 +1274,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             parent,
             values=Theme.PRESET_NAMES,
             variable=self.ui_theme_var,
-            selected_color=Theme.ACCENT_BLUE,
-            selected_hover_color=Theme.ACCENT_BLUE_HOVER,
+            selected_color=Theme.ACCENT_GREEN,
+            selected_hover_color=Theme.ACCENT_GREEN_HOVER,
             command=self._on_ui_theme_change,
         )
         self.ui_theme_seg.pack(fill="x", pady=(0, 10))
@@ -1239,7 +1288,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         
         ctk.CTkLabel(parent, text="Layout Mode:").pack(anchor="w", pady=(5, 0))
         self.layout_mode_seg = ctk.CTkSegmentedButton(parent, values=["grid", "timeline"], variable=self.layout_mode_var,
-                                                      selected_color=Theme.ACCENT_BLUE, selected_hover_color=Theme.ACCENT_BLUE_HOVER,
+                                                      selected_color=Theme.ACCENT_GREEN, selected_hover_color=Theme.ACCENT_GREEN_HOVER,
                                                       command=self._on_layout_mode_change)
         self.layout_mode_seg.pack(fill="x", pady=(0, 5))
         
@@ -1346,7 +1395,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         
         ctk.CTkLabel(parent, text="Rotate Thumbnails:").pack(anchor="w", pady=(10, 0))
         self.rotate_seg = ctk.CTkSegmentedButton(parent, values=["0", "90", "180", "270"], variable=self.rotate_thumbnails_var,
-                                                 selected_color=Theme.ACCENT_BLUE, selected_hover_color=Theme.ACCENT_BLUE_HOVER,
+                                                 selected_color=Theme.ACCENT_GREEN, selected_hover_color=Theme.ACCENT_GREEN_HOVER,
                                                  command=self.quick_refresh_layout)
         self.rotate_seg.pack(fill="x", pady=5)
 
@@ -1596,6 +1645,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def refresh_ui_from_state(self, state):
         settings = state.settings
+        self._apply_ui_theme(settings.ui_theme)
         for var_name, setting_key in self.settings_map.items():
             if hasattr(self, var_name) and hasattr(settings, setting_key):
                 val = getattr(settings, setting_key)
@@ -2662,6 +2712,12 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             'start_time': self.state_manager.get_state().active_sheet().in_point_sec,
             'end_time': self.state_manager.get_state().active_sheet().out_point_sec,
         }
+        # A trim belongs to the source that produced the current sheet, not a
+        # replacement video. Leave the sheet untouched until preview succeeds.
+        current_meta = self.state_manager.get_state().thumbnail_metadata
+        if current_meta and not self._preview_metadata_matches_single_source([preview_target_path], current_meta):
+            preview_settings['start_time'] = None
+            preview_settings['end_time'] = None
 
         self.status_lbl.configure(text="Generating Preview...")
         self.progress_bar.configure(mode="indeterminate")
@@ -2833,11 +2889,20 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                         raise ValueError('Could not resize a cached frame.')
 
     def _handle_preview_done(self, data):
+        metadata = data.get("meta") or []
+        previous_meta = self.state_manager.get_state().thumbnail_metadata
+        previous_sources = {os.path.normcase(os.path.abspath(item['video_path']))
+                            for item in previous_meta if item.get('video_path')}
+        new_sources = {os.path.normcase(os.path.abspath(item['video_path']))
+                       for item in metadata if item.get('video_path')}
         self.state_manager.snapshot()
+        if previous_sources and new_sources != previous_sources:
+            sheet = self.state_manager.get_state().active_sheet()
+            sheet.in_point_sec = None
+            sheet.out_point_sec = None
         self.selected_thumbnail_index = None
         if data.get('grid_path'):
             self.preview_temp_dir = os.path.dirname(data['grid_path'])
-        metadata = data.get("meta") or []
         for index, item in enumerate(metadata):
             item.setdefault('id', f"thumb-{time.time_ns()}-{index + 1}")
             item.setdefault('hidden', False)
@@ -3155,6 +3220,13 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             settings.sheet_name = active_sheet.name
             settings.start_time = active_sheet.in_point_sec
             settings.end_time = active_sheet.out_point_sec
+            if (active_tab == 'Single Source' and len(final_input_list) == 1
+                    and os.path.isfile(final_input_list[0])
+                    and self.state_manager.get_state().thumbnail_metadata
+                    and not self._preview_metadata_matches_single_source(
+                        final_input_list, self.state_manager.get_state().thumbnail_metadata)):
+                settings.start_time = None
+                settings.end_time = None
             settings.exclude_frames = None
             settings.exclude_shots = None
             settings.output_naming_mode = self.output_naming_mode_var.get()
