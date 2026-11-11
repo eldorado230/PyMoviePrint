@@ -112,7 +112,9 @@ def test_real_hdr_detection_and_tonemapping(tmp_path, transfer, kind):
 
 
 @pytest.mark.parametrize('cancel', [False, True])
-def test_real_ffmpeg_timeout_and_cancellation(cancel):
+@pytest.mark.parametrize('wrapper', [False, pytest.param(True, marks=pytest.mark.skipif(
+    sys.platform != 'win32', reason='Windows package-manager shim check'))])
+def test_real_ffmpeg_timeout_and_cancellation(cancel, wrapper):
     import time
     event = threading.Event()
     timer = threading.Timer(0.2, event.set) if cancel else None
@@ -120,9 +122,12 @@ def test_real_ffmpeg_timeout_and_cancellation(cancel):
         timer.start()
     start = time.monotonic()
     try:
+        cmd = [vp.FFMPEG_BIN, '-hide_banner', '-loglevel', 'error', '-re', '-f', 'lavfi',
+               '-i', 'color=red:size=16x16:rate=1', '-t', '30', '-f', 'null', '-']
+        if wrapper:
+            cmd = [sys.executable, '-c', 'import subprocess, sys; subprocess.run(sys.argv[1:])'] + cmd
         ok = vp.VideoUtils.run_ffmpeg_command_with_control(
-            [vp.FFMPEG_BIN, '-hide_banner', '-loglevel', 'error', '-re', '-f', 'lavfi',
-             '-i', 'color=red:size=16x16:rate=1', '-t', '30', '-f', 'null', '-'],
+            cmd,
             logging.getLogger('cancel'), cancel_event=event, timeout=5 if cancel else 0.3)
         assert not ok
         assert time.monotonic() - start < 7
