@@ -118,6 +118,20 @@ class VideoUtils:
         return VideoUtils.run_ffmpeg_command_with_control(cmd, logger, cancel_event, timeout)
 
     @staticmethod
+    def stop_ffmpeg_process(process):
+        # Windows package-manager shims can launch FFmpeg as a child process.
+        # Killing only the shim leaves the child holding the output pipes open.
+        if os.name == 'nt' and process.poll() is None:
+            try:
+                subprocess.run(['taskkill', '/PID', str(process.pid), '/T', '/F'],
+                               stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+                               startupinfo=VideoUtils.get_startup_info(), timeout=5)
+            except (OSError, subprocess.TimeoutExpired):
+                pass
+        if process.poll() is None:
+            process.kill()
+
+    @staticmethod
     def run_ffmpeg_command_with_control(cmd: List[str], logger: logging.Logger,
                                         cancel_event=None, timeout: Optional[float] = None, captured_output=None) -> bool:
         process = None
@@ -129,16 +143,14 @@ class VideoUtils:
             deadline = time.monotonic() + (timeout or 3600)
             while True:
                 if cancel_event is not None and cancel_event.is_set():
-                    process.terminate()
-                    try: process.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        process.kill()
+                    VideoUtils.stop_ffmpeg_process(process)
                     process.communicate()
                     logger.info("FFmpeg cancelled. Command: %s", ' '.join(cmd))
                     return False
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
-                    process.kill(); process.communicate()
+                    VideoUtils.stop_ffmpeg_process(process)
+                    process.communicate()
                     logger.error("FFmpeg timed out after %ss. Command: %s", timeout or 3600, ' '.join(cmd))
                     return False
                 try:
@@ -160,7 +172,7 @@ class VideoUtils:
         finally:
             if process is not None:
                 if process.poll() is None:
-                    process.kill()
+                    VideoUtils.stop_ffmpeg_process(process)
                 process.communicate()
 
 

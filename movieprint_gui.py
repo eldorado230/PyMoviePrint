@@ -2969,6 +2969,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         if success_count == 0:
             summary = f"Generation failed: {failure_count} movieprint(s) failed."
 
+        if skipped:
+            summary += f" {skipped} skipped (already exist)."
+
         if cancelled:
             summary = f"Generation cancelled: {success_count} completed before cancellation."
             if failure_count:
@@ -3128,7 +3131,8 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             "These batch items would write to the same output:\n\n"
             f"{first['output']}\n\n"
             f"{videos}\n\n"
-            "Use Add Suffix, change Fixed Name, or split that folder into a separate batch."
+            "Use Add Suffix or include {movie} in Fixed Name to give each video a unique output. "
+            "Alternatively, save next to each video when they are in separate folders."
         )
 
     def generate_movieprint_action(self):
@@ -3267,8 +3271,13 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             messagebox.showerror("Naming Error", str(error))
             return
         if collisions:
-            self._show_batch_output_collision_error(collisions)
-            return
+            colliding = {video for group in collisions for video in group['videos']}
+            discovered = DependencyManager.movieprint_maker_module.discover_video_files(
+                settings.input_paths, settings.video_extensions, settings.recursive_scan,
+                logging.getLogger("batch_output_collision_check"))
+            if all(video in colliding for video in discovered):
+                self._show_batch_output_collision_error(collisions)
+                return
         
         self.status_lbl.configure(text="Generating...")
         self.progress_bar.configure(mode="determinate")
