@@ -154,6 +154,10 @@ def find_output_path_collisions(video_files, settings):
     outputs_by_key = {}
     for video_path in video_files:
         output_path = get_target_output_path(video_path, settings)
+        # Existing primary outputs are skipped before any image or frame export.
+        # They cannot collide with another writer in this batch.
+        if getattr(settings, 'overwrite_mode', 'overwrite') == 'skip' and os.path.exists(output_path):
+            continue
         key = os.path.normcase(os.path.abspath(output_path))
         outputs_by_key.setdefault(key, {'output': output_path, 'videos': []})
         outputs_by_key[key]['videos'].append(video_path)
@@ -161,6 +165,8 @@ def find_output_path_collisions(video_files, settings):
             frame_settings = argparse.Namespace(**vars(settings))
             frame_settings.output_frames_only = True
             frame_path = get_target_output_path(video_path, frame_settings)
+            if getattr(settings, 'overwrite_mode', 'overwrite') == 'skip' and os.path.exists(frame_path):
+                continue
             frame_key = os.path.normcase(os.path.abspath(frame_path))
             outputs_by_key.setdefault(frame_key, {'output': frame_path, 'videos': []})
             outputs_by_key[frame_key]['videos'].append(video_path)
@@ -904,8 +910,8 @@ def execute_movieprint_generation(settings, logger, progress_callback=None, fast
         failed_ops.append({
             'video': video_path,
             'reason': (
-                "Output filename collision. Choose Add Suffix, change the Fixed Name, "
-                "or process videos from this folder separately."
+                "Output filename collision. Use Add Suffix or include {movie} in Fixed Name, "
+                "or select one video for this output."
             ),
         })
 

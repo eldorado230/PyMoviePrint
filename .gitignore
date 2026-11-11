@@ -169,6 +169,5 @@ test_long-thumb.jpg
 tmp/
 
 # Local development files
-tests/
 TO BE REVIEWED/
 .ruff_cache/
