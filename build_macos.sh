@@ -1,4 +1,5 @@
 #!/bin/bash
+set -e
 
 # Check if python3 is available
 if ! command -v python3 &> /dev/null

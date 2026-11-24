@@ -6,7 +6,7 @@ It ships with both:
 - a desktop GUI (`movieprint_gui.py`) for interactive workflows, and
 - a CLI (`movieprint_maker.py`) for repeatable automation and batch jobs.
 
-Current version: **1.1.0**.
+Current version: **1.1.1**.
 
 ---
 
