@@ -32,6 +32,15 @@ FFMPEG_BIN = 'ffmpeg'
 FFPROBE_BIN = 'ffprobe'
 
 
+def recovered_frame_matches_scene(frame, scene):
+    decoded_at = frame.get('decoded_timestamp_sec')
+    start = scene.get('scene_start_sec')
+    end = scene.get('scene_end_sec')
+    if decoded_at is None or start is None or end is None:
+        return True
+    return float(start) <= decoded_at < float(end)
+
+
 def _ensure_cv2_available(logger: Optional[logging.Logger] = None):
     """Raise a clear runtime error when OpenCV is unavailable."""
     if cv2 is not None:
@@ -401,6 +410,15 @@ class VideoExtractor:
             filters.append("format=yuv420p")
         vf_filter = ",".join(filters)
         q_scale = '5' if fast_preview else '2'
+        # Explicit still-image encoders can close cleanly on a seek that
+        # produces zero frames. The animated WebP encoder cannot.
+        if ext.lower() in {'jpg', 'jpeg'}:
+            image_options = ['-pix_fmt', 'yuvj420p']
+        elif ext.lower() == 'webp':
+            image_options = ['-c:v', 'libwebp']
+        else:
+            image_options = []
+        image_options += ['-q:v', q_scale, '-f', 'image2']
 
         def cancelled():
             return cancel_event is not None and cancel_event.is_set()
@@ -420,12 +438,13 @@ class VideoExtractor:
 
         def extract_one(i, ts):
             if cancelled():
-                return None
+                return None, False
             if not fast_preview:
                 self.logger.info(f"  ... Extracting frame {i+1}/{total_frames} at {ts:.2f}s ...")
             final_path = frame_path(i, ts)
+            Path(final_path).unlink(missing_ok=True)
             
-            cmd = [FFMPEG_BIN]
+            cmd = [FFMPEG_BIN, '-xerror']
             if use_gpu:
                 cmd.extend(['-hwaccel', 'cuda'])
 
@@ -436,16 +455,18 @@ class VideoExtractor:
             cmd.extend([
                 '-frames:v', '1',
                 '-vf', vf_filter,
-                '-q:v', q_scale,
+                *image_options,
                 final_path,
                 '-y', '-hide_banner', '-loglevel', 'error'
             ])
 
             success = VideoUtils.run_ffmpeg_command(cmd, self.logger, cancel_event=cancel_event)
 
-            if success and os.path.exists(final_path):
-                return metadata(i, ts, int(ts * fps))
-            return None
+            if not success:
+                return None, False
+            if os.path.isfile(final_path):
+                return metadata(i, ts, int(ts * fps)), False
+            return None, True
 
         max_workers = 1
         if total_frames > 1 and not use_gpu and not hdr_tonemap:
@@ -459,20 +480,21 @@ class VideoExtractor:
                 max_workers = min(4, total_frames, os.cpu_count() or 1)
 
         if max_workers == 1:
-            results = [extract_one(i, ts) for i, ts in enumerate(timestamps)]
+            attempts = [extract_one(i, ts) for i, ts in enumerate(timestamps)]
         else:
             self.logger.info(f"  Extracting frames with {max_workers} parallel FFmpeg workers.")
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [executor.submit(extract_one, i, ts) for i, ts in enumerate(timestamps)]
-                results = [future.result() for future in futures]
+                attempts = [future.result() for future in futures]
 
-        missing = [(i, ts) for i, ts in enumerate(timestamps) if results[i] is None]
+        results = [item for item, _ in attempts]
+        missing = [(i, timestamps[i]) for i, (_, empty_seek) in enumerate(attempts) if empty_seek]
         if missing and not cancelled():
             # Average FPS can't locate EOF on VFR sources. Recover the actual
             # last decoded image once, then fill only requests past its PTS.
             with tempfile.TemporaryDirectory(dir=output_folder) as tail_dir:
                 tail_path = os.path.join(tail_dir, f"last.{ext}")
-                last_pts = self._extract_video_tail(tail_path, vf_filter, q_scale, cancel_event)
+                last_pts = self._extract_video_tail(tail_path, vf_filter, image_options, cancel_event)
                 if last_pts is not None:
                     last_number = frame_count - 1 if frame_count > 0 else round(last_pts * fps)
                     for i, ts in missing:
@@ -482,10 +504,11 @@ class VideoExtractor:
                             self.logger.info("  Using final frame at %.3fs for request at %.3fs.", last_pts, ts)
                             shutil.copyfile(tail_path, frame_path(i, ts))
                             results[i] = metadata(i, ts, last_number)
+                            results[i]['decoded_timestamp_sec'] = last_pts
 
         return sorted((item for item in results if item is not None), key=lambda item: item['timestamp_sec'])
 
-    def _extract_video_tail(self, output_path, vf_filter, q_scale, cancel_event):
+    def _extract_video_tail(self, output_path, vf_filter, image_options, cancel_event):
         """Decode to EOF and return the last image's presentation time."""
         # Prefer a short tail seek. Container duration can include trailing
         # audio, or seeking may be unsupported, so allow a full decode retry.
@@ -495,18 +518,28 @@ class VideoExtractor:
             Path(output_path).unlink(missing_ok=True)
             output = {}
             cmd = [
-                FFMPEG_BIN, '-hide_banner', '-nostats', '-loglevel', 'info',
+                FFMPEG_BIN, '-xerror', '-hide_banner', '-nostats', '-loglevel', 'info',
                 '-copyts', '-start_at_zero', *seek, '-i', self.video_path,
                 '-vf', f'{vf_filter},showinfo', '-vsync', '0',
-                '-q:v', q_scale, '-update', '1', '-y', output_path,
+                *image_options, '-update', '1', '-y', output_path,
             ]
-            if VideoUtils.run_ffmpeg_command_with_control(
+            if not VideoUtils.run_ffmpeg_command_with_control(
                     cmd, self.logger, cancel_event=cancel_event, captured_output=output
-            ) and os.path.isfile(output_path):
-                timestamps = re.findall(rb'\bpts_time:\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)',
-                                        output['stderr'])
-                if timestamps:
-                    return float(timestamps[-1])
+            ):
+                return None
+            if os.path.isfile(output_path):
+                # showinfo's display seconds are rounded on long sources.
+                # Read the integer PTS and filter time base for scene checks.
+                time_base = None
+                last_pts = None
+                for line in output['stderr'].splitlines():
+                    if not line.startswith(b'[Parsed_showinfo_'):
+                        continue
+                    if match := re.search(rb'config in time_base:\s*(\d+)/(\d+)', line):
+                        time_base = tuple(map(int, match.groups()))
+                    if time_base and (match := re.search(rb'\bn:\s*\d+\s+pts:\s*(-?\d+)\s+pts_time:', line)):
+                        last_pts = int(match[1]) * time_base[0] / time_base[1]
+                return last_pts
         return None
 
     def extract_shots(self, output_folder: str, threshold: float = 27.0, ext: str = "jpg",
@@ -591,12 +624,19 @@ class VideoExtractor:
         for shot in detected_shots:
             meta = meta_map.get(shot['timestamp_sec'])
             if meta:
+                if not recovered_frame_matches_scene(meta, shot):
+                    self.logger.error("Recovered frame at %.6fs is outside scene %.6fs–%.6fs.",
+                                      meta['decoded_timestamp_sec'], shot['scene_start_sec'], shot['scene_end_sec'])
+                    continue
                 meta['duration_frames'] = shot['duration_frames']
                 meta['scene_start_sec'] = shot['scene_start_sec']
                 meta['scene_end_sec'] = shot['scene_end_sec']
                 meta['boundary_score'] = shot['boundary_score']
                 final_results.append(meta)
         
+        if len(final_results) != len(detected_shots):
+            self.logger.error("Extracted %d of %d detected scenes.", len(final_results), len(detected_shots))
+            return []
         return final_results
 
     def extract_via_ffmpeg(self, output_folder: str,
@@ -741,7 +781,7 @@ def extract_frames_from_timestamps(video_path, timestamps, output_folder, logger
 def extract_shot_boundary_frames(video_path, output_folder, logger, detector_threshold=27.0, output_format="jpg", start_time_sec=0.0, end_time_sec=None, hdr_tonemap=False, hdr_algorithm='hable', cancel_event=None):
     _ensure_cv2_available(logger)
     with VideoExtractor(video_path, logger) as ex:
-        return True, ex.extract_shots(
+        frames = ex.extract_shots(
             output_folder,
             detector_threshold,
             output_format,
@@ -750,6 +790,7 @@ def extract_shot_boundary_frames(video_path, output_folder, logger, detector_thr
             hdr_tonemap=hdr_tonemap,
             hdr_algorithm=hdr_algorithm, cancel_event=cancel_event
         )
+        return bool(frames), frames
 
 def extract_frames(video_path, output_folder, logger, interval_seconds=None, interval_frames=None, output_format="jpg", start_time_sec=0.0, end_time_sec=None, use_gpu=False, fast_preview=False, hdr_tonemap=False, hdr_algorithm='hable', cancel_event=None):
     _ensure_cv2_available(logger)

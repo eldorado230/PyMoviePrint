@@ -66,7 +66,8 @@ def test_tail_seek_uses_source_time_with_a_longer_clip(tmp_path, monkeypatch):
     source = make_clip(tmp_path, 4, duration=5)
     with vp.VideoExtractor(source, LOG) as extractor:
         path = tmp_path / 'tail.jpg'
-        assert extractor._extract_video_tail(str(path), 'format=yuv420p', '2', None) == 4.75
+        options = ['-pix_fmt', 'yuvj420p', '-q:v', '2', '-f', 'image2']
+        assert extractor._extract_video_tail(str(path), 'format=yuv420p', options, None) == 4.75
         assert path.stat().st_size > 0
 
 
@@ -109,3 +110,51 @@ def test_interval_longer_than_clip_still_has_an_initial_frame(tmp_path):
     source = make_clip(tmp_path, 4, duration=.25)
     ok, frames = vp.extract_frames(source, str(tmp_path / 'interval'), LOG, interval_seconds=1)
     assert ok and [item['timestamp_sec'] for item in frames] == [0]
+
+
+@pytest.mark.parametrize('extension', ['jpg', 'png', 'webp'])
+def test_an_empty_still_image_seek_is_recoverable(tmp_path, monkeypatch, extension):
+    monkeypatch.setenv('PYMOVIEPRINT_TIMESTAMP_GPU', 'off')
+    source = make_clip(tmp_path, 4)
+    ok, frames = vp.extract_frames_from_timestamps(source, [0.875], str(tmp_path / 'frames'), LOG,
+                                                   output_format=extension)
+    assert ok and frames[0]['decoded_timestamp_sec'] == 0.75
+    from PIL import Image
+    with Image.open(frames[0]['frame_path']) as frame:
+        frame.load()
+        assert frame.size == (96, 64)
+
+
+def test_failed_command_cannot_be_replaced_with_last_frame(tmp_path, monkeypatch):
+    source = make_clip(tmp_path, 4)
+    monkeypatch.setenv('PYMOVIEPRINT_TIMESTAMP_GPU', 'off')
+    real_command = vp.VideoUtils.run_ffmpeg_command
+
+    def run(cmd, logger, **kwargs):
+        if cmd[cmd.index('-ss') + 1] == '0.95':
+            # Trigger an actual FFmpeg failure by selecting an unknown encoder.
+            cmd = [*cmd[:-5], '-c:v', 'missing_encoder', *cmd[-5:]]
+        return real_command(cmd, logger, **kwargs)
+
+    monkeypatch.setattr(vp.VideoUtils, 'run_ffmpeg_command', run)
+    ok, frames = vp.extract_frames_from_timestamps(source, [0.85, 0.95], str(tmp_path / 'frames'), LOG)
+    assert not ok and [frame['timestamp_sec'] for frame in frames] == [0.85]
+
+
+def test_outside_scene_recovery_fails_shot_preview_and_manual_export(tmp_path, monkeypatch):
+    from scenedetect import FrameTimecode
+
+    source = make_clip(tmp_path, 4)
+    monkeypatch.setenv('PYMOVIEPRINT_TIMESTAMP_GPU', 'off')
+    # Simulate detector bounds that extend beyond the final decoded frame.
+    cuts = [FrameTimecode(8, 10.0), FrameTimecode(10, 10.0)]
+    manager = Mock()
+    manager.get_scene_list.return_value = [tuple(cuts)]
+    monkeypatch.setattr(vp, 'SceneManager', lambda **kwargs: manager)
+    assert vp.extract_shot_boundary_frames(source, str(tmp_path / 'shots'), LOG) == (False, [])
+
+    settings = SimpleNamespace(
+        manual_timestamps=[0.9], frame_format='jpg',
+        manual_thumbnail_metadata=[{'timestamp_sec': 0.9, 'scene_start_sec': 0.8, 'scene_end_sec': 1.0}],
+    )
+    assert maker._extract_frames(source, str(tmp_path / 'export'), settings, None, None, LOG) == (False, [])
