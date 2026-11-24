@@ -3,10 +3,13 @@ from pathlib import Path
 import runpy
 from threading import Barrier
 
+import pytest
 
-migrate_settings = runpy.run_path(
+launcher = runpy.run_path(
     str(Path(__file__).resolve().parents[1] / 'windows' / 'installer_entry.py')
-)['migrate_settings']
+)
+migrate_settings = launcher['migrate_settings']
+preview_arguments = launcher['preview_arguments']
 
 
 def test_migration_preserves_exact_bytes_and_source(tmp_path):
@@ -48,3 +51,17 @@ def test_simultaneous_migration_only_creates_one_complete_file(tmp_path):
         assert sum(pool.map(launch, range(4))) == 1
     assert official.read_bytes() == payload
     assert not list(tmp_path.glob('.settings-*'))
+
+
+def test_explorer_launch_preserves_a_single_literal_path(tmp_path):
+    path = tmp_path / 'Sample; café & 01.MP4'
+    path.touch()
+    assert preview_arguments([]) is None
+    assert preview_arguments(['--preview', str(path)]) == path
+    for arguments in (
+        ['--preview', str(path), str(path)],
+        ['--preview', path.name],
+        ['--preview', str(tmp_path / 'missing.mp4')],
+    ):
+        with pytest.raises(ValueError):
+            preview_arguments(arguments)

@@ -10,7 +10,7 @@ Use x64 Python 3.11 and Inno Setup 6.4.3. The [official Inno Setup 6.4.3 package
 .\windows\build-installer.ps1 -Python 'C:\path\to\python.exe' -Iscc 'C:\path\to\ISCC.exe' -BuildUpgradeBaseline
 ```
 
-The installer contains a PyInstaller one-directory GUI, Python, the app dependencies, and private FFmpeg, FFprobe, and FFplay executables with their shared libraries. It makes no changes to the user's PATH or file associations. The installed launcher chooses the private media executables explicitly.
+The installer contains a PyInstaller one-directory GUI, Python, the app dependencies, and private FFmpeg, FFprobe, and FFplay executables with their shared libraries. The installed launcher chooses its private media executables explicitly. The optional **Create video contact sheet** Explorer action opens one selected video and builds an editable preview. It is off by default and available under **Show more options** on Windows 11. It leaves the default video app and the user's PATH alone.
 
 ## Acceptance
 

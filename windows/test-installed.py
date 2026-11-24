@@ -22,12 +22,15 @@ import win32event
 import win32gui
 import win32process
 import win32security
+from win32com.shell import shell, shellcon
 from winrt.windows.graphics.imaging import BitmapDecoder
 from winrt.windows.media.ocr import OcrEngine
 from winrt.windows.storage import FileAccessMode, StorageFile
 
 
 UNINSTALL_KEY = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{139498E8-C648-4E75-839A-2B924CD6DC1C}_is1'
+VERB = 'PyMoviePrint.ContactSheet'
+EXTENSIONS = ('.mp4', '.avi', '.mov', '.mkv', '.flv', '.wmv')
 
 
 def wait_for(check, label, seconds=35):
@@ -46,6 +49,42 @@ def user_installation():
             return winreg.QueryValueEx(key, 'DisplayVersion')[0]
     except FileNotFoundError:
         return None
+
+
+def verb_key(extension):
+    return fr'Software\Classes\SystemFileAssociations\{extension}\shell\{VERB}'
+
+
+def verb_value(extension, name='', command=False):
+    key_path = verb_key(extension) + (r'\command' if command else '')
+    try:
+        with winreg.OpenKey(winreg.HKEY_CURRENT_USER, key_path) as key:
+            return winreg.QueryValueEx(key, name)[0]
+    except FileNotFoundError:
+        return None
+
+
+def shell_preview(video, environment):
+    # The Shell resolves the registered verb and invokes it with the selected file.
+    previous = {key: os.environ.get(key) for key in ('LOCALAPPDATA', 'PATH', 'SDL_AUDIODRIVER')}
+    try:
+        os.environ.update({key: environment[key] for key in previous})
+        result = shell.ShellExecuteEx(
+            fMask=shellcon.SEE_MASK_NOCLOSEPROCESS | shellcon.SEE_MASK_FLAG_DDEWAIT,
+            lpVerb=VERB, lpFile=str(video), lpDirectory=str(video.parent), nShow=win32con.SW_SHOWNORMAL,
+        )
+    finally:
+        for key, value in previous.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+    handle = result['hProcess']
+    assert handle is not None, 'The Explorer action did not start an application process.'
+    try:
+        return psutil.Process(win32process.GetProcessId(handle))
+    finally:
+        handle.Close()
 
 
 def installer(executable, arguments, environment, log):
@@ -141,6 +180,28 @@ def click_label(engine, window, label, path):
     mouse_click(point)
 
 
+def edit_preview(engine, window, screenshot):
+    focus_window(window)
+    left, top, right, bottom = win32gui.GetWindowRect(window)
+    frame = ImageGrab.grab(bbox=(left, top, right, bottom)).convert('RGB')
+    width, height = frame.size
+    pixels = frame.load()
+    # The FFmpeg colour-bar fixture has saturated reds that do not occur in the neutral UI.
+    point = next((
+        (left + x, top + y)
+        for y in range(height // 6, 5 * height // 6, 4)
+        for x in range(width // 5, 3 * width // 4, 4)
+        if all(r > 215 and g < 65 and b < 65 for r, g, b in (pixels[x, y], pixels[x + 3, y]))
+    ), None)
+    assert point is not None, 'No test video frame visible in the preview.'
+    mouse_click(point)
+    find_label(engine, window, 'Included in export', screenshot)
+    click_label(engine, window, 'Hide', screenshot)
+    find_label(engine, window, 'Hidden from export', screenshot)
+    click_label(engine, window, 'Hide', screenshot)
+    find_label(engine, window, 'Included in export', screenshot)
+
+
 def open_player(engine, window, path):
     # At 100% DPI Windows OCR can omit the narrow Fit/Player button labels.
     # The Zoom label is a visible anchor in the same toolbar row.
@@ -156,6 +217,23 @@ def play_with_audio(window, path):
     scale = ctypes.windll.user32.GetDpiForWindow(window) / 96
     # Audio player is the rightmost control in the centred player footer.
     mouse_click((round((left + right) / 2 + 235 * scale), bottom - round(32 * scale)))
+
+
+def check_playback(engine, window, app, ffplay, video, environment, log):
+    root = video.parent
+    open_player(engine, window, root / 'player-control.png')
+    player = wait_for(lambda: find_window(app.pid, 'Player - '), 'bundled video player window')
+    play_with_audio(player, root / 'audio-control.png')
+    playback = wait_for(lambda: next(
+        (process for process in app.children() if Path(process.exe()) == ffplay), None
+    ), 'installed FFplay child')
+    assert playback.wait(timeout=15) == 0
+    assert 'Audio player failed' not in log.read_text(encoding='utf-8')
+    subprocess.run([ffplay, '-v', 'error', '-autoexit', '-nodisp', str(video)], check=True,
+                   env=environment, timeout=15, capture_output=True)
+    print('Candidate FFplay completed GUI audio/video playback and audio-only decoding with the SDL dummy device.')
+    win32gui.PostMessage(player, win32con.WM_CLOSE, 0, 0)
+    wait_for(lambda: not win32gui.IsWindowVisible(player), 'player closed')
 
 
 def close_window(app, window):
@@ -218,6 +296,7 @@ def main(root, baseline, setup):
         assert shutil.which(dependency, path=environment['PATH']) is None, dependency
     installer(baseline, [f'/DIR={install}'], environment, root / 'install.log')
     assert user_installation() == f'{__version__}.1'
+    assert all(verb_value(extension, command=True) is None for extension in EXTENSIONS)
     ffmpeg, ffprobe, ffplay = (install / 'ffmpeg' / f'{name}.exe' for name in ('ffmpeg', 'ffprobe', 'ffplay'))
     video = root / 'Acceptance; Sample.mp4'
     subprocess.run([
@@ -259,18 +338,6 @@ def main(root, baseline, setup):
             assert len(image.convert('RGB').resize((64, 64)).getcolors(4096)) > 64
             print(f'Packaged PNG export validated: {image.width}x{image.height}')
         dismiss_export_confirmation(first)
-        open_player(engine, window, root / 'player-control.png')
-        player = wait_for(lambda: find_window(first.pid, 'Player - '), 'bundled video player window')
-        play_with_audio(player, root / 'audio-control.png')
-        playback = wait_for(lambda: next(
-            (process for process in psutil.Process(first.pid).children() if Path(process.exe()) == ffplay), None
-        ), 'installed FFplay child')
-        assert playback.wait(timeout=15) == 0
-        assert 'Audio player failed' not in log.read_text(encoding='utf-8')
-        # Decode the fixture audio on its own as well as playing the AV file through the GUI.
-        subprocess.run([ffplay, '-v', 'error', '-autoexit', '-nodisp', str(video)], check=True,
-                       env=environment, timeout=15, capture_output=True)
-        print('Installed FFplay completed GUI audio/video playback and audio-only decoding with the SDL dummy device.')
         close_window(first, window)
     finally:
         if first.poll() is None:
@@ -286,32 +353,54 @@ def main(root, baseline, setup):
     state = ProjectState(source_paths=[str(video)])
     project_io.save_project_json(str(project), state)
     original = {path: digest(path) for path in (settings, project, video, result)}
-    installer(setup, [], environment, root / 'upgrade.log')
+    foreign_command = 'existing-user-command'
+    with winreg.CreateKey(winreg.HKEY_CURRENT_USER, verb_key('.wmv') + r'\command') as key:
+        winreg.SetValueEx(key, '', 0, winreg.REG_SZ, foreign_command)
+    installer(setup, ['/TASKS=explorer'], environment, root / 'upgrade.log')
     assert user_installation() == f'{__version__}.2'
     assert all(digest(path) == checksum for path, checksum in original.items())
-    # Export after reopening without seeding settings again.
+    for extension in EXTENSIONS[:-1]:
+        assert verb_value(extension) == 'Create video contact sheet'
+        assert verb_value(extension, 'MultiSelectModel') == 'Single'
+        assert verb_value(extension, command=True) == f'"{installed_exe}" --preview "%1"'
+    assert verb_value('.wmv', command=True) == foreign_command
+    # Launch from the Shell and wait for a preview without clicking Build preview.
     result.unlink()
-    second = subprocess.Popen([installed_exe], cwd=root, env=environment)
+    second = shell_preview(video, environment)
     try:
         window = wait_for(lambda: find_window(second.pid, f'PyMoviePrint v{__version__}'), 'upgraded PyMoviePrint window')
+        find_label(engine, window, 'Preview ready', root / 'explorer-preview.png')
+        edit_preview(engine, window, root / 'explorer-edit.png')
         export_png(engine, window, root / 'export-after-upgrade.png', log, result)
+        with Image.open(result) as image:
+            assert image.format == 'PNG'
+            image.load()
         dismiss_export_confirmation(second)
+        check_playback(engine, window, second, ffplay, video, environment, log)
         close_window(second, window)
     finally:
-        if second.poll() is None:
+        if second.is_running():
             second.terminate()
             second.wait(timeout=10)
 
+    installer(setup, ['/MERGETASKS=!explorer'], environment, root / 'explorer-opt-out.log')
+    assert all(verb_value(extension, command=True) is None for extension in EXTENSIONS[:-1])
+    assert verb_value('.wmv', command=True) == foreign_command
+    installer(setup, ['/TASKS=explorer'], environment, root / 'explorer-opt-in.log')
+    assert verb_value('.mp4', command=True) == f'"{installed_exe}" --preview "%1"'
     uninstaller = list(install.glob('unins*.exe'))
     assert len(uninstaller) == 1
     installer(uninstaller[0], [], environment, root / 'uninstall.log')
     wait_for(lambda: not installed_exe.exists(), 'installed executable removed')
     assert user_installation() is None
+    assert all(verb_value(extension, command=True) is None for extension in EXTENSIONS[:-1])
+    assert verb_value('.wmv', command=True) == foreign_command
     assert all(digest(path) == original[path] for path in (project, video))
     assert json.loads(settings.read_text(encoding='utf-8'))['input_paths_list'] == [str(video)]
     assert digest(legacy_settings) == legacy_checksum
     assert result.is_file()
     print('Restricted-token install, upgrade, relaunch, and uninstall passed. Project, media, export, and settings survived.')
+    print('Explorer opt-in, automatic preview via the registered Shell verb, opt-out, and uninstall passed.')
 
 
 if __name__ == '__main__':
@@ -326,6 +415,6 @@ if __name__ == '__main__':
     try:
         main(root, options.baseline.resolve(), options.setup.resolve())
     finally:
-        uninstaller = next((root / 'installed').glob('unins*.exe'), None)
+        uninstaller = next((root / 'profile' / 'Programs' / 'PyMoviePrint').glob('unins*.exe'), None)
         if uninstaller is not None and user_installation() is not None:
             installer(uninstaller, [], isolated_environment(root), root / 'cleanup.log')
