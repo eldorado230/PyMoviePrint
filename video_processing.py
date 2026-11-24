@@ -18,7 +18,9 @@ import tempfile
 import re
 from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from typing import List, Dict, Any, Optional, Tuple, Union
+from PIL import Image
 
 # --- Optional Dependency Handling ---
 try:
@@ -68,6 +70,21 @@ class VideoUtils:
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             return startupinfo
         return None
+
+    @staticmethod
+    @lru_cache(maxsize=4)
+    def frame_sync_args(executable, mode):
+        """FFmpeg replaced the global -vsync option with -fps_mode."""
+        try:
+            help_result = subprocess.run(
+                [executable, '-hide_banner', '-h', 'full'], capture_output=True,
+                startupinfo=VideoUtils.get_startup_info(), timeout=10,
+            )
+            if help_result.returncode == 0 and re.search(rb'^-fps_mode\b', help_result.stdout, re.MULTILINE):
+                return ['-fps_mode', mode]
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        return ['-vsync', '0' if mode == 'passthrough' else mode]
 
     @staticmethod
     def check_ffmpeg_gpu(logger: logging.Logger) -> bool:
@@ -410,12 +427,12 @@ class VideoExtractor:
             filters.append("format=yuv420p")
         vf_filter = ",".join(filters)
         q_scale = '5' if fast_preview else '2'
-        # Explicit still-image encoders can close cleanly on a seek that
-        # produces zero frames. The animated WebP encoder cannot.
+        # Use still-image encoders that can close cleanly on an empty seek.
+        # Decode WebP intermediates as PNG so this also works with FFmpeg
+        # builds without libwebp or with only an animated WebP encoder.
+        webp = ext.lower() == 'webp'
         if ext.lower() in {'jpg', 'jpeg'}:
             image_options = ['-pix_fmt', 'yuvj420p']
-        elif ext.lower() == 'webp':
-            image_options = ['-c:v', 'libwebp']
         else:
             image_options = []
         image_options += ['-q:v', q_scale, '-f', 'image2']
@@ -443,6 +460,9 @@ class VideoExtractor:
                 self.logger.info(f"  ... Extracting frame {i+1}/{total_frames} at {ts:.2f}s ...")
             final_path = frame_path(i, ts)
             Path(final_path).unlink(missing_ok=True)
+            decoded_path = final_path + '.png' if webp else final_path
+            if webp:
+                Path(decoded_path).unlink(missing_ok=True)
             
             cmd = [FFMPEG_BIN, '-xerror']
             if use_gpu:
@@ -456,17 +476,22 @@ class VideoExtractor:
                 '-frames:v', '1',
                 '-vf', vf_filter,
                 *image_options,
-                final_path,
+                decoded_path,
                 '-y', '-hide_banner', '-loglevel', 'error'
             ])
 
-            success = VideoUtils.run_ffmpeg_command(cmd, self.logger, cancel_event=cancel_event)
-
-            if not success:
-                return None, False
-            if os.path.isfile(final_path):
+            try:
+                if not VideoUtils.run_ffmpeg_command(cmd, self.logger, cancel_event=cancel_event):
+                    return None, False
+                if not os.path.isfile(decoded_path):
+                    return None, True
+                if webp:
+                    with Image.open(decoded_path) as frame:
+                        frame.save(final_path, lossless=True)
                 return metadata(i, ts, int(ts * fps)), False
-            return None, True
+            finally:
+                if webp:
+                    Path(decoded_path).unlink(missing_ok=True)
 
         max_workers = 1
         if total_frames > 1 and not use_gpu and not hdr_tonemap:
@@ -493,9 +518,13 @@ class VideoExtractor:
             # Average FPS can't locate EOF on VFR sources. Recover the actual
             # last decoded image once, then fill only requests past its PTS.
             with tempfile.TemporaryDirectory(dir=output_folder) as tail_dir:
-                tail_path = os.path.join(tail_dir, f"last.{ext}")
+                tail_path = os.path.join(tail_dir, 'last.png' if webp else f"last.{ext}")
                 last_pts = self._extract_video_tail(tail_path, vf_filter, image_options, cancel_event)
                 if last_pts is not None:
+                    if webp:
+                        with Image.open(tail_path) as frame:
+                            tail_path = os.path.join(tail_dir, 'last.webp')
+                            frame.save(tail_path, lossless=True)
                     last_number = frame_count - 1 if frame_count > 0 else round(last_pts * fps)
                     for i, ts in missing:
                         if cancelled():
@@ -520,7 +549,7 @@ class VideoExtractor:
             cmd = [
                 FFMPEG_BIN, '-xerror', '-hide_banner', '-nostats', '-loglevel', 'info',
                 '-copyts', '-start_at_zero', *seek, '-i', self.video_path,
-                '-vf', f'{vf_filter},showinfo', '-vsync', '0',
+                '-vf', f'{vf_filter},showinfo', *VideoUtils.frame_sync_args(FFMPEG_BIN, 'passthrough'),
                 *image_options, '-update', '1', '-y', output_path,
             ]
             if not VideoUtils.run_ffmpeg_command_with_control(
@@ -681,7 +710,9 @@ class VideoExtractor:
         vf_filter = ",".join(filters)
         q_scale = '5' if fast_preview else '2'
 
-        output_pattern = os.path.join(output_folder, f"ffmpeg_out_%05d.{ext}")
+        webp = ext.lower() == 'webp'
+        decoded_ext = 'png' if webp else ext
+        output_pattern = os.path.join(output_folder, f"ffmpeg_out_%05d.{decoded_ext}")
         base_cmd = [FFMPEG_BIN]
         
         if hdr_tonemap: use_gpu = False
@@ -698,7 +729,7 @@ class VideoExtractor:
             '-vf', vf_filter,
         ]
         if use_variable_frame_rate:
-            output_args.extend(['-vsync', 'vfr'])
+            output_args.extend(VideoUtils.frame_sync_args(FFMPEG_BIN, 'vfr'))
         output_args.extend([
             '-frame_pts', '1',
             '-q:v', q_scale,
@@ -709,7 +740,7 @@ class VideoExtractor:
         if not VideoUtils.run_ffmpeg_command(base_cmd + input_args + output_args, self.logger, cancel_event=cancel_event):
             return []
 
-        generated_files = sorted(glob.glob(os.path.join(output_folder, f"ffmpeg_out_*.{ext}")))
+        generated_files = sorted(glob.glob(os.path.join(output_folder, f"ffmpeg_out_*.{decoded_ext}")))
         for i, file_path in enumerate(generated_files):
             est_time = effective_start_time + (
                 (i * interval_sec)
@@ -719,7 +750,12 @@ class VideoExtractor:
             est_frame = int(est_time * fps)
             final_path = os.path.join(output_folder, f"frame_{i:05d}_absFN{est_frame}.{ext}")
             try:
-                os.rename(file_path, final_path)
+                if webp:
+                    with Image.open(file_path) as frame:
+                        frame.save(final_path, lossless=True)
+                    os.unlink(file_path)
+                else:
+                    os.rename(file_path, final_path)
                 results.append({
                     'frame_path': final_path, 
                     'frame_number': est_frame, 

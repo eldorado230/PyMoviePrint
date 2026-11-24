@@ -30,7 +30,7 @@ def test_grid_tail_matches_last_frame_in_preview_and_export(tmp_path, monkeypatc
     monkeypatch.setenv('PYMOVIEPRINT_TIMESTAMP_GPU', 'off')
     if variable_rate:
         source = make_clip(tmp_path, 10, ['-vf', r'select=eq(n\,0)+eq(n\,1)+eq(n\,2)+eq(n\,9)',
-                                         '-vsync', 'vfr'])
+                                         *vp.VideoUtils.frame_sync_args(vp.FFMPEG_BIN, 'vfr')])
         last_pts = 0.9
     else:
         source = make_clip(tmp_path, 4)

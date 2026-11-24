@@ -38,6 +38,13 @@ def test_real_shot_and_interval_extraction(clip, tmp_path):
     assert shots[1]['scene_end_sec'] == pytest.approx(2, abs=0.11)
     ok, interval = vp.extract_frames(str(clip), str(tmp_path/'interval'), log)
     assert ok and [m['timestamp_sec'] for m in interval] == [0, 1]
+    ok, interval_webp = vp.extract_frames(str(clip), str(tmp_path/'interval-webp'), log,
+                                          interval_frames=25, output_format='webp')
+    assert ok and [m['timestamp_sec'] for m in interval_webp] == [0, 1]
+    from PIL import Image
+    for frame in interval_webp:
+        with Image.open(frame['frame_path']) as image:
+            assert image.format == 'WEBP'
     ok, trimmed = vp.extract_shot_boundary_frames(str(clip), str(tmp_path/'trimmed'), log,
                                                   start_time_sec=0.5, end_time_sec=1.5)
     assert ok and len(trimmed) == 2
