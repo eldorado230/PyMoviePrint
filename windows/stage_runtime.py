@@ -69,6 +69,11 @@ def ffmpeg_runtime(app, cache, notices):
         if not any('configuration:' in line for line in lines) or re.search(r'--enable-(gpl|nonfree)\b', '\n'.join(lines)):
             raise ValueError(f'{name} does not report an expected LGPL configuration.')
         versions[name] = lines
+    license_output = subprocess.check_output(
+        [media / 'ffmpeg.exe', '-L'], stderr=subprocess.PIPE, text=True, timeout=20,
+    )
+    if not re.search(r'GNU Lesser General Public License\b.{0,180}\bversion 3\b', ' '.join(license_output.split()), re.I):
+        raise ValueError('The pinned FFmpeg build did not report the expected LGPLv3 licence.')
     (license_target / 'SOURCE.txt').write_text(
         f"FFmpeg uses the GNU LGPL. Exact FFmpeg source revision:\n"
         f"https://github.com/FFmpeg/FFmpeg/tree/{pin['source_commit']}\n"
@@ -78,6 +83,7 @@ def ffmpeg_runtime(app, cache, notices):
     )
     return {
         **pin,
+        'reported_license': 'LGPL-3.0-or-later',
         'executables_and_libraries': {path.name: sha256(path) for path in sorted(media.iterdir())},
         'tool_versions': versions,
     }
@@ -107,6 +113,10 @@ def python_notices(notices):
     python_license = Path(sys.base_prefix) / 'LICENSE.txt'
     if python_license.is_file():
         shutil.copy2(python_license, notices / 'Python-LICENSE.txt')
+    for library in ('tcl8.6', 'tk8.6'):
+        license_path = Path(sys.base_prefix) / 'tcl' / library / 'license.terms'
+        if license_path.is_file():
+            shutil.copy2(license_path, notices / f'{library}-license.terms')
     return packages
 
 

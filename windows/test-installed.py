@@ -15,6 +15,7 @@ import winreg
 
 from PIL import Image, ImageGrab
 import psutil
+import pywintypes
 import win32api
 import win32con
 import win32event
@@ -89,10 +90,33 @@ async def recognise(engine, screenshot):
     return await engine.recognize_async(bitmap)
 
 
+def mouse_click(point):
+    win32api.SetCursorPos(point)
+    time.sleep(.15)
+    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+
+
+def focus_window(window):
+    if win32gui.GetForegroundWindow() == window:
+        return
+    win32gui.ShowWindow(window, win32con.SW_RESTORE)
+    try:
+        win32gui.SetForegroundWindow(window)
+    except pywintypes.error:
+        flags = win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE
+        win32gui.SetWindowPos(window, win32con.HWND_TOPMOST, 0, 0, 0, 0, flags)
+        try:
+            left, top, _, _ = win32gui.GetWindowRect(window)
+            mouse_click((left + 100, top + 18))
+        finally:
+            win32gui.SetWindowPos(window, win32con.HWND_NOTOPMOST, 0, 0, 0, 0, flags)
+    wait_for(lambda: win32gui.GetForegroundWindow() == window, 'packaged window focus', 5)
+
+
 def find_label(engine, window, label, path):
     def detect():
-        if win32gui.GetForegroundWindow() != window:
-            win32gui.SetForegroundWindow(window)
+        focus_window(window)
         x, y, right, bottom = win32gui.GetWindowRect(window)
         ImageGrab.grab(bbox=(max(x, 0), max(y, 0), right, bottom)).save(path)
         result = asyncio.run(recognise(engine, path))
@@ -113,10 +137,7 @@ def find_label(engine, window, label, path):
 
 def click_label(engine, window, label, path):
     point = find_label(engine, window, label, path)
-    win32api.SetCursorPos(point)
-    time.sleep(.2)
-    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
-    win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
+    mouse_click(point)
 
 
 def close_window(app, window):
@@ -124,9 +145,26 @@ def close_window(app, window):
     assert app.wait(timeout=20) == 0
 
 
+def dismiss_export_confirmation(app):
+    dialog = wait_for(lambda: find_window(app.pid, 'Generation Complete'), 'successful export confirmation')
+    okay = win32gui.GetDlgItem(dialog, 1)
+    win32gui.PostMessage(okay, win32con.BM_CLICK, 0, 0)
+    wait_for(lambda: not win32gui.IsWindowVisible(dialog), 'export confirmation dismissed')
+
+
 def digest(path):
     with path.open('rb') as stream:
         return hashlib.file_digest(stream, 'sha256').hexdigest()
+
+
+def isolated_environment(root):
+    environment = dict(os.environ)
+    environment.update(
+        LOCALAPPDATA=str(root / 'profile'),
+        PATH=os.pathsep.join([str(Path(os.environ['SystemRoot']) / 'System32'), os.environ['SystemRoot']]),
+        SDL_AUDIODRIVER='dummy',
+    )
+    return environment
 
 
 def main(root, baseline, setup):
@@ -139,12 +177,7 @@ def main(root, baseline, setup):
     local_data = root / 'profile'
     local_data.mkdir()
     profile = local_data / 'PyMoviePrintPrototype'
-    environment = dict(os.environ)
-    environment.update(
-        LOCALAPPDATA=str(local_data),
-        PATH=os.pathsep.join([str(Path(os.environ['SystemRoot']) / 'System32'), os.environ['SystemRoot']]),
-        SDL_AUDIODRIVER='dummy',
-    )
+    environment = isolated_environment(root)
     for dependency in ('python.exe', 'ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe'):
         assert shutil.which(dependency, path=environment['PATH']) is None, dependency
     installer(baseline, [f'/DIR={install}'], environment, root / 'install.log')
@@ -188,6 +221,7 @@ def main(root, baseline, setup):
             assert image.width >= 500 and image.height >= 300, image.size
             assert len(image.convert('RGB').resize((64, 64)).getcolors(4096)) > 64
             print(f'Packaged PNG export validated: {image.width}x{image.height}')
+        dismiss_export_confirmation(first)
         click_label(engine, window, 'Player', root / 'player-control.png')
         player = wait_for(lambda: find_window(first.pid, 'Player - '), 'bundled video player window')
         click_label(engine, player, 'Audio player', root / 'audio-control.png')
@@ -225,6 +259,7 @@ def main(root, baseline, setup):
         window = wait_for(lambda: find_window(second.pid, 'PyMoviePrint v1.1.1'), 'upgraded PyMoviePrint window')
         click_label(engine, window, 'Export movieprint', root / 'export-after-upgrade.png')
         wait_for(result.exists, 'export using restored settings')
+        dismiss_export_confirmation(second)
         close_window(second, window)
     finally:
         if second.poll() is None:
@@ -248,4 +283,12 @@ if __name__ == '__main__':
     parser.add_argument('baseline', type=Path)
     parser.add_argument('setup', type=Path)
     options = parser.parse_args()
-    main(options.root.resolve(), options.baseline.resolve(), options.setup.resolve())
+    root = options.root.resolve()
+    if root.exists():
+        parser.error('The acceptance directory must not already exist.')
+    try:
+        main(root, options.baseline.resolve(), options.setup.resolve())
+    finally:
+        uninstaller = next((root / 'installed').glob('unins*.exe'), None)
+        if uninstaller is not None and user_installation() is not None:
+            installer(uninstaller, [], isolated_environment(root), root / 'cleanup.log')

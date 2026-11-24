@@ -1,3 +1,7 @@
+#if (Ver >> 8) != 0x060403
+  #error This prototype requires Inno Setup 6.4.3.
+#endif
+
 [Setup]
 AppId={{A723B754-7B1E-4C1F-9F8B-64A1A9A411F2}
 AppName=PyMoviePrint Windows Prototype

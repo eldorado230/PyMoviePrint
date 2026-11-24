@@ -47,21 +47,26 @@ try {
     if ($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+$') { throw 'Could not read app version' }
     $manifestPath = Join-Path $app 'dependency-manifest.json'
     $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
-    $manifest | Add-Member -NotePropertyName installer_compiler_version -NotePropertyValue (Get-Item -LiteralPath $isccFullPath).VersionInfo.ProductVersion
-    $manifest | Add-Member -NotePropertyName installer_revision -NotePropertyValue "$version.$Revision"
-    $manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+    $manifest | Add-Member -NotePropertyName installer_compiler_version -NotePropertyValue '6.4.3'
+    $manifest | Add-Member -NotePropertyName installer_compiler_sha256 -NotePropertyValue (Get-FileHash -LiteralPath $isccFullPath).Hash.ToLowerInvariant()
+    $manifest | Add-Member -NotePropertyName installer_revision -NotePropertyValue ''
     $script = Join-Path $PSScriptRoot 'PyMoviePrint.iss'
     if ($BuildUpgradeBaseline) {
         if ($Revision -lt 2) { throw 'A baseline requires a revision of at least 2' }
+        $manifest.installer_revision = "$version.$($Revision - 1)"
+        $manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
         Invoke-Checked $isccFullPath @(
-            "/DAppSource=$app", "/DPackageVersion=$version.$($Revision - 1)", "/O$output",
+            '/Qp', "/DAppSource=$app", "/DPackageVersion=$($manifest.installer_revision)", "/O$output",
             '/FPyMoviePrint-Setup-Baseline', $script
         )
     }
-    Invoke-Checked $isccFullPath @("/DAppSource=$app", "/DPackageVersion=$version.$Revision", "/O$output", $script)
+    $manifest.installer_revision = "$version.$Revision"
+    $manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
+    Invoke-Checked $isccFullPath @('/Qp', "/DAppSource=$app", "/DPackageVersion=$($manifest.installer_revision)", "/O$output", $script)
     Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $output 'dependency-manifest.json') -Force
-    Get-Item -LiteralPath (Join-Path $output 'PyMoviePrint-Setup.exe') | Select-Object FullName, Length
-    Get-FileHash -LiteralPath (Join-Path $output 'PyMoviePrint-Setup.exe')
+    $setup = Get-Item -LiteralPath (Join-Path $output 'PyMoviePrint-Setup.exe')
+    Write-Host "$($setup.FullName) ($($setup.Length) bytes)"
+    Write-Host "SHA-256 $((Get-FileHash -LiteralPath $setup.FullName).Hash.ToLowerInvariant())"
 } finally {
     Pop-Location
     $resolvedWork = (Resolve-Path -LiteralPath $work).Path
