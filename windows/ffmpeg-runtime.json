@@ -1,0 +1,7 @@
+{
+  "url": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/releases/download/autobuild-2026-10-31-12-59/ffmpeg-n9.0.2-39-g7adfbe40dc-win64-lgpl-shared-9.0.zip",
+  "sha256": "e907b01fa4783913151237e37df2a10fa97d99a1598a021bf59d4ae62ffed4c0",
+  "source_commit": "7adfbe40dcde598f93a6963d2f7b22cd75202ccc",
+  "build_recipe": "https://github.com/FFmpeg-Builds/FFmpeg-Builds/tree/5031c6f1082414e53688d39e521849905071070d",
+  "variant": "win64-lgpl-shared"
+}

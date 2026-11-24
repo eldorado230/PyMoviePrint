@@ -32,6 +32,7 @@ except ImportError:
 
 FFMPEG_BIN = 'ffmpeg'
 FFPROBE_BIN = 'ffprobe'
+FFPLAY_BIN = 'ffplay'
 
 
 def recovered_frame_matches_scene(frame, scene):
