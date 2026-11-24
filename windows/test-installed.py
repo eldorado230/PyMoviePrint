@@ -141,6 +141,23 @@ def click_label(engine, window, label, path):
     mouse_click(point)
 
 
+def open_player(engine, window, path):
+    # At 100% DPI Windows OCR can omit the narrow Fit/Player button labels.
+    # The Zoom label is a visible anchor in the same toolbar row.
+    x, y = find_label(engine, window, 'Zoom', path)
+    scale = ctypes.windll.user32.GetDpiForWindow(window) / 96
+    mouse_click((x + round(275 * scale), y))
+
+
+def play_with_audio(window, path):
+    focus_window(window)
+    left, top, right, bottom = win32gui.GetWindowRect(window)
+    ImageGrab.grab(bbox=(max(left, 0), max(top, 0), right, bottom)).save(path)
+    scale = ctypes.windll.user32.GetDpiForWindow(window) / 96
+    # Audio player is the rightmost control in the centred player footer.
+    mouse_click((round((left + right) / 2 + 235 * scale), bottom - round(32 * scale)))
+
+
 def close_window(app, window):
     win32gui.PostMessage(window, win32con.WM_CLOSE, 0, 0)
     assert app.wait(timeout=20) == 0
@@ -236,9 +253,9 @@ def main(root, baseline, setup):
             assert len(image.convert('RGB').resize((64, 64)).getcolors(4096)) > 64
             print(f'Packaged PNG export validated: {image.width}x{image.height}')
         dismiss_export_confirmation(first)
-        click_label(engine, window, 'Player', root / 'player-control.png')
+        open_player(engine, window, root / 'player-control.png')
         player = wait_for(lambda: find_window(first.pid, 'Player - '), 'bundled video player window')
-        click_label(engine, player, 'Audio player', root / 'audio-control.png')
+        play_with_audio(player, root / 'audio-control.png')
         playback = wait_for(lambda: next(
             (process for process in psutil.Process(first.pid).children() if Path(process.exe()) == ffplay), None
         ), 'installed FFplay child')
