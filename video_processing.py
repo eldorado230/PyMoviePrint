@@ -17,8 +17,10 @@ import threading
 import tempfile
 import re
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
 from typing import List, Dict, Any, Optional, Tuple, Union
+from PIL import Image
 
 # --- Optional Dependency Handling ---
 try:
@@ -30,6 +32,15 @@ except ImportError:
 
 FFMPEG_BIN = 'ffmpeg'
 FFPROBE_BIN = 'ffprobe'
+
+
+def recovered_frame_matches_scene(frame, scene):
+    decoded_at = frame.get('decoded_timestamp_sec')
+    start = scene.get('scene_start_sec')
+    end = scene.get('scene_end_sec')
+    if decoded_at is None or start is None or end is None:
+        return True
+    return float(start) <= decoded_at < float(end)
 
 
 def _ensure_cv2_available(logger: Optional[logging.Logger] = None):
@@ -59,6 +70,21 @@ class VideoUtils:
             startupinfo.dwFlags |= subprocess.STARTF_USESHOWWINDOW
             return startupinfo
         return None
+
+    @staticmethod
+    @lru_cache(maxsize=4)
+    def frame_sync_args(executable, mode):
+        """FFmpeg replaced the global -vsync option with -fps_mode."""
+        try:
+            help_result = subprocess.run(
+                [executable, '-hide_banner', '-h', 'full'], capture_output=True,
+                startupinfo=VideoUtils.get_startup_info(), timeout=10,
+            )
+            if help_result.returncode == 0 and re.search(rb'^-fps_mode\b', help_result.stdout, re.MULTILINE):
+                return ['-fps_mode', mode]
+        except (OSError, subprocess.TimeoutExpired):
+            pass
+        return ['-vsync', '0' if mode == 'passthrough' else mode]
 
     @staticmethod
     def check_ffmpeg_gpu(logger: logging.Logger) -> bool:
@@ -366,10 +392,9 @@ class VideoExtractor:
             self.logger.error("FFmpeg not found.")
             return []
 
-        results = []
         Path(output_folder).mkdir(parents=True, exist_ok=True)
         
-        fps, _, _ = self.properties
+        fps, _, frame_count = self.properties
         if fps <= 0: fps = 24.0
         total_frames = len(timestamps)
         display_aspect_ratio = self.display_aspect_ratio
@@ -395,31 +420,51 @@ class VideoExtractor:
         hdr_type = self.detect_hdr_type() if hdr_tonemap else None
         hdr_filters = self._build_hdr_filter_chain(hdr_algorithm, hdr_type) if hdr_tonemap else ""
         
+        filters = [hdr_filters] if hdr_tonemap else []
+        if fast_preview:
+            filters.append("scale=480:-1")
+        if not hdr_tonemap:
+            filters.append("format=yuv420p")
+        vf_filter = ",".join(filters)
+        q_scale = '5' if fast_preview else '2'
+        # Use still-image encoders that can close cleanly on an empty seek.
+        # Decode WebP intermediates as PNG so this also works with FFmpeg
+        # builds without libwebp or with only an animated WebP encoder.
+        webp = ext.lower() == 'webp'
+        if ext.lower() in {'jpg', 'jpeg'}:
+            image_options = ['-pix_fmt', 'yuvj420p']
+        else:
+            image_options = []
+        image_options += ['-q:v', q_scale, '-f', 'image2']
+
+        def cancelled():
+            return cancel_event is not None and cancel_event.is_set()
+
+        def frame_path(i, ts):
+            return os.path.join(output_folder, f"thumb_{i:03d}_ts{ts:.2f}.{ext}")
+
+        def metadata(i, ts, frame_number):
+            return {
+                'frame_path': frame_path(i, ts),
+                'frame_number': frame_number,
+                'timestamp_sec': ts,
+                'video_filename': self.video_filename,
+                'video_path': os.path.abspath(self.video_path),
+                **({'aspect_ratio': display_aspect_ratio} if display_aspect_ratio else {}),
+            }
+
         def extract_one(i, ts):
-            if cancel_event is not None and cancel_event.is_set():
-                return None
+            if cancelled():
+                return None, False
             if not fast_preview:
                 self.logger.info(f"  ... Extracting frame {i+1}/{total_frames} at {ts:.2f}s ...")
-
-            # Construct Filter Chain
-            filters = []
-            if hdr_tonemap:
-                filters.append(hdr_filters)
-
-            if fast_preview:
-                filters.append("scale=480:-1")
-
-            # Ensure standard pixel format for output if not handled by tone mapper
-            if not hdr_tonemap:
-                filters.append("format=yuv420p")
-
-            vf_filter = ",".join(filters)
-            q_scale = '5' if fast_preview else '2'
-
-            final_name = f"thumb_{i:03d}_ts{ts:.2f}.{ext}"
-            final_path = os.path.join(output_folder, final_name)
+            final_path = frame_path(i, ts)
+            Path(final_path).unlink(missing_ok=True)
+            decoded_path = final_path + '.png' if webp else final_path
+            if webp:
+                Path(decoded_path).unlink(missing_ok=True)
             
-            cmd = [FFMPEG_BIN]
+            cmd = [FFMPEG_BIN, '-xerror']
             if use_gpu:
                 cmd.extend(['-hwaccel', 'cuda'])
 
@@ -430,23 +475,23 @@ class VideoExtractor:
             cmd.extend([
                 '-frames:v', '1',
                 '-vf', vf_filter,
-                '-q:v', q_scale,
-                final_path,
+                *image_options,
+                decoded_path,
                 '-y', '-hide_banner', '-loglevel', 'error'
             ])
 
-            success = VideoUtils.run_ffmpeg_command(cmd, self.logger, cancel_event=cancel_event)
-
-            if success and os.path.exists(final_path):
-                return {
-                    'frame_path': final_path,
-                    'frame_number': int(ts * fps),
-                    'timestamp_sec': ts,
-                    'video_filename': self.video_filename,
-                    'video_path': os.path.abspath(self.video_path),
-                    **({'aspect_ratio': display_aspect_ratio} if display_aspect_ratio else {}),
-                }
-            return None
+            try:
+                if not VideoUtils.run_ffmpeg_command(cmd, self.logger, cancel_event=cancel_event):
+                    return None, False
+                if not os.path.isfile(decoded_path):
+                    return None, True
+                if webp:
+                    with Image.open(decoded_path) as frame:
+                        frame.save(final_path, lossless=True)
+                return metadata(i, ts, int(ts * fps)), False
+            finally:
+                if webp:
+                    Path(decoded_path).unlink(missing_ok=True)
 
         max_workers = 1
         if total_frames > 1 and not use_gpu and not hdr_tonemap:
@@ -460,21 +505,71 @@ class VideoExtractor:
                 max_workers = min(4, total_frames, os.cpu_count() or 1)
 
         if max_workers == 1:
-            for i, ts in enumerate(timestamps):
-                result = extract_one(i, ts)
-                if result:
-                    results.append(result)
+            attempts = [extract_one(i, ts) for i, ts in enumerate(timestamps)]
         else:
             self.logger.info(f"  Extracting frames with {max_workers} parallel FFmpeg workers.")
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [executor.submit(extract_one, i, ts) for i, ts in enumerate(timestamps)]
-                for future in as_completed(futures):
-                    result = future.result()
-                    if result:
-                        results.append(result)
+                attempts = [future.result() for future in futures]
 
-        results.sort(key=lambda x: x['timestamp_sec'])
-        return results
+        results = [item for item, _ in attempts]
+        missing = [(i, timestamps[i]) for i, (_, empty_seek) in enumerate(attempts) if empty_seek]
+        if missing and not cancelled():
+            # Average FPS can't locate EOF on VFR sources. Recover the actual
+            # last decoded image once, then fill only requests past its PTS.
+            with tempfile.TemporaryDirectory(dir=output_folder) as tail_dir:
+                tail_path = os.path.join(tail_dir, 'last.png' if webp else f"last.{ext}")
+                last_pts = self._extract_video_tail(tail_path, vf_filter, image_options, cancel_event)
+                if last_pts is not None:
+                    if webp:
+                        with Image.open(tail_path) as frame:
+                            tail_path = os.path.join(tail_dir, 'last.webp')
+                            frame.save(tail_path, lossless=True)
+                    last_number = frame_count - 1 if frame_count > 0 else round(last_pts * fps)
+                    for i, ts in missing:
+                        if cancelled():
+                            break
+                        if ts >= last_pts:
+                            self.logger.info("  Using final frame at %.3fs for request at %.3fs.", last_pts, ts)
+                            shutil.copyfile(tail_path, frame_path(i, ts))
+                            results[i] = metadata(i, ts, last_number)
+                            results[i]['decoded_timestamp_sec'] = last_pts
+
+        return sorted((item for item in results if item is not None), key=lambda item: item['timestamp_sec'])
+
+    def _extract_video_tail(self, output_path, vf_filter, image_options, cancel_event):
+        """Decode to EOF and return the last image's presentation time."""
+        # Prefer a short tail seek. Container duration can include trailing
+        # audio, or seeking may be unsupported, so allow a full decode retry.
+        for seek in (['-sseof', '-2'], []):
+            if cancel_event is not None and cancel_event.is_set():
+                return None
+            Path(output_path).unlink(missing_ok=True)
+            output = {}
+            cmd = [
+                FFMPEG_BIN, '-xerror', '-hide_banner', '-nostats', '-loglevel', 'info',
+                '-copyts', '-start_at_zero', *seek, '-i', self.video_path,
+                '-vf', f'{vf_filter},showinfo', *VideoUtils.frame_sync_args(FFMPEG_BIN, 'passthrough'),
+                *image_options, '-update', '1', '-y', output_path,
+            ]
+            if not VideoUtils.run_ffmpeg_command_with_control(
+                    cmd, self.logger, cancel_event=cancel_event, captured_output=output
+            ):
+                return None
+            if os.path.isfile(output_path):
+                # showinfo's display seconds are rounded on long sources.
+                # Read the integer PTS and filter time base for scene checks.
+                time_base = None
+                last_pts = None
+                for line in output['stderr'].splitlines():
+                    if not line.startswith(b'[Parsed_showinfo_'):
+                        continue
+                    if match := re.search(rb'config in time_base:\s*(\d+)/(\d+)', line):
+                        time_base = tuple(map(int, match.groups()))
+                    if time_base and (match := re.search(rb'\bn:\s*\d+\s+pts:\s*(-?\d+)\s+pts_time:', line)):
+                        last_pts = int(match[1]) * time_base[0] / time_base[1]
+                return last_pts
+        return None
 
     def extract_shots(self, output_folder: str, threshold: float = 27.0, ext: str = "jpg",
                       start_time: float = 0.0, end_time: Optional[float] = None,
@@ -553,18 +648,24 @@ class VideoExtractor:
         )
         
         final_results = []
-        meta_map = {round(m['timestamp_sec'], 2): m for m in extracted_meta}
+        meta_map = {m['timestamp_sec']: m for m in extracted_meta}
         
         for shot in detected_shots:
-            ts_key = round(shot['timestamp_sec'], 2)
-            meta = meta_map.get(ts_key)
+            meta = meta_map.get(shot['timestamp_sec'])
             if meta:
+                if not recovered_frame_matches_scene(meta, shot):
+                    self.logger.error("Recovered frame at %.6fs is outside scene %.6fs–%.6fs.",
+                                      meta['decoded_timestamp_sec'], shot['scene_start_sec'], shot['scene_end_sec'])
+                    continue
                 meta['duration_frames'] = shot['duration_frames']
                 meta['scene_start_sec'] = shot['scene_start_sec']
                 meta['scene_end_sec'] = shot['scene_end_sec']
                 meta['boundary_score'] = shot['boundary_score']
                 final_results.append(meta)
         
+        if len(final_results) != len(detected_shots):
+            self.logger.error("Extracted %d of %d detected scenes.", len(final_results), len(detected_shots))
+            return []
         return final_results
 
     def extract_via_ffmpeg(self, output_folder: str,
@@ -588,7 +689,10 @@ class VideoExtractor:
             interval_sec = 1.0
         filters = []
         use_variable_frame_rate = False
-        if interval_sec: filters.append(f"fps=1/{interval_sec:.5f}")
+        if interval_sec:
+            # Keep the initial sample even if the clip ends before half an
+            # interval, when the FPS filter would round its duration to zero.
+            filters.append(f"fps=1/{interval_sec:.5f}:eof_action=pass")
         elif interval_frames:
             filters.append(f"select='not(mod(n,{interval_frames}))'")
             use_variable_frame_rate = True
@@ -606,7 +710,9 @@ class VideoExtractor:
         vf_filter = ",".join(filters)
         q_scale = '5' if fast_preview else '2'
 
-        output_pattern = os.path.join(output_folder, f"ffmpeg_out_%05d.{ext}")
+        webp = ext.lower() == 'webp'
+        decoded_ext = 'png' if webp else ext
+        output_pattern = os.path.join(output_folder, f"ffmpeg_out_%05d.{decoded_ext}")
         base_cmd = [FFMPEG_BIN]
         
         if hdr_tonemap: use_gpu = False
@@ -623,7 +729,7 @@ class VideoExtractor:
             '-vf', vf_filter,
         ]
         if use_variable_frame_rate:
-            output_args.extend(['-vsync', 'vfr'])
+            output_args.extend(VideoUtils.frame_sync_args(FFMPEG_BIN, 'vfr'))
         output_args.extend([
             '-frame_pts', '1',
             '-q:v', q_scale,
@@ -634,7 +740,7 @@ class VideoExtractor:
         if not VideoUtils.run_ffmpeg_command(base_cmd + input_args + output_args, self.logger, cancel_event=cancel_event):
             return []
 
-        generated_files = sorted(glob.glob(os.path.join(output_folder, f"ffmpeg_out_*.{ext}")))
+        generated_files = sorted(glob.glob(os.path.join(output_folder, f"ffmpeg_out_*.{decoded_ext}")))
         for i, file_path in enumerate(generated_files):
             est_time = effective_start_time + (
                 (i * interval_sec)
@@ -644,7 +750,12 @@ class VideoExtractor:
             est_frame = int(est_time * fps)
             final_path = os.path.join(output_folder, f"frame_{i:05d}_absFN{est_frame}.{ext}")
             try:
-                os.rename(file_path, final_path)
+                if webp:
+                    with Image.open(file_path) as frame:
+                        frame.save(final_path, lossless=True)
+                    os.unlink(file_path)
+                else:
+                    os.rename(file_path, final_path)
                 results.append({
                     'frame_path': final_path, 
                     'frame_number': est_frame, 
@@ -706,7 +817,7 @@ def extract_frames_from_timestamps(video_path, timestamps, output_folder, logger
 def extract_shot_boundary_frames(video_path, output_folder, logger, detector_threshold=27.0, output_format="jpg", start_time_sec=0.0, end_time_sec=None, hdr_tonemap=False, hdr_algorithm='hable', cancel_event=None):
     _ensure_cv2_available(logger)
     with VideoExtractor(video_path, logger) as ex:
-        return True, ex.extract_shots(
+        frames = ex.extract_shots(
             output_folder,
             detector_threshold,
             output_format,
@@ -715,6 +826,7 @@ def extract_shot_boundary_frames(video_path, output_folder, logger, detector_thr
             hdr_tonemap=hdr_tonemap,
             hdr_algorithm=hdr_algorithm, cancel_event=cancel_event
         )
+        return bool(frames), frames
 
 def extract_frames(video_path, output_folder, logger, interval_seconds=None, interval_frames=None, output_format="jpg", start_time_sec=0.0, end_time_sec=None, use_gpu=False, fast_preview=False, hdr_tonemap=False, hdr_algorithm='hable', cancel_event=None):
     _ensure_cv2_available(logger)

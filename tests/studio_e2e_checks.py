@@ -175,12 +175,14 @@ def check_real_workflows(app, clip, tmp_path, monkeypatch):
     app.current_project_path = str(project)
     app.save_project_action()
     saved, _ = project_io.load_project(str(project))
+    assert saved.source_paths == [str(clip)]
     assert len(saved.thumbnail_metadata) == 2
     for sheet in saved.sheets:
         for item in sheet.thumbnail_metadata:
             Path(item['frame_path']).unlink(missing_ok=True)
     monkeypatch.setattr(gui.filedialog, 'askopenfilename', lambda **k: str(project))
     app.open_project_action()
+    assert app._current_source_paths() == [str(clip)]
     assert all(Path(i['frame_path']).is_file() for i in app.state_manager.get_state().thumbnail_metadata)
 
     # Real single export + individual frames + embedded editable PNG.
@@ -308,7 +310,7 @@ def check_real_workflows(app, clip, tmp_path, monkeypatch):
     app._add_batch_paths([str(clip), str(second)])
     app.generate_movieprint_action()
     wait_job()
-    assert (output / 'two-scenes_test.png').is_file()
+    assert (output / f'{clip.stem}_test.png').is_file()
     assert (output / 'second_test.png').is_file()
     broken = tmp_path / 'broken.mp4'
     broken.write_bytes(b'not a movie')

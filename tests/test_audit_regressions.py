@@ -71,7 +71,7 @@ class AuditRegressionTests(unittest.TestCase):
         timestamps = extract_mock.call_args.kwargs["timestamps"]
         self.assertEqual(timestamps, [42.0, 44.0, 46.0, 48.0])
 
-    def test_interval_frame_command_defaults_start_and_sets_vsync_as_output_option(self):
+    def test_interval_frame_command_defaults_start_and_sets_frame_sync_as_output_option(self):
         extractor = video_processing.VideoExtractor.__new__(video_processing.VideoExtractor)
         extractor.video_path = "clip.mp4"
         extractor.logger = self.logger
@@ -96,7 +96,11 @@ class AuditRegressionTests(unittest.TestCase):
         filter_value = command[command.index("-vf") + 1]
         self.assertIn("select='not(mod(n,30))'", filter_value)
         self.assertNotIn("vsync", filter_value)
-        self.assertEqual(command[command.index("-vsync") + 1], "vfr")
+        self.assertNotIn("fps_mode", filter_value)
+        sync_option = "-fps_mode" if "-fps_mode" in command else "-vsync"
+        sync_position = command.index(sync_option)
+        self.assertGreater(sync_position, command.index("-i"))
+        self.assertEqual(command[sync_position + 1], "vfr")
 
     def test_cli_returns_failure_exit_code(self):
         argv = ["movieprint_maker.py", "clip.mp4", "out", "--columns", "2", "--rows", "2"]

@@ -304,9 +304,13 @@ def _merge_manual_thumbnail_metadata(metadata_list, settings, logger):
             )
             continue
 
+        if not video_processing.recovered_frame_matches_scene(extracted, requested):
+            logger.error("  Recovered frame for %.6fs is outside the preview scene.", requested['timestamp_sec'])
+            return []
+
         combined = dict(extracted)
         for field, value in requested.items():
-            if field in {'frame_path', 'video_path', 'video_filename'}:
+            if field in {'frame_path', 'video_path', 'video_filename', 'decoded_timestamp_sec'}:
                 continue
             combined[field] = value
 
@@ -357,7 +361,7 @@ def _extract_frames(video_file_path, temp_dir, settings, start_sec, end_sec, log
         )
         if success and extracted:
             extracted = _merge_manual_thumbnail_metadata(extracted, settings, logger)
-        return success, extracted
+        return success and bool(extracted), extracted
 
     # 2. Grid Mode (Calculated Timestamps)
     if settings.extraction_mode == 'interval' and settings.layout_mode == "grid" and getattr(settings, 'columns', None) and getattr(settings, 'rows', None):
