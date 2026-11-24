@@ -17,7 +17,7 @@ import threading
 import tempfile
 import re
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import ThreadPoolExecutor
 from typing import List, Dict, Any, Optional, Tuple, Union
 
 # --- Optional Dependency Handling ---
@@ -366,10 +366,9 @@ class VideoExtractor:
             self.logger.error("FFmpeg not found.")
             return []
 
-        results = []
         Path(output_folder).mkdir(parents=True, exist_ok=True)
         
-        fps, _, _ = self.properties
+        fps, _, frame_count = self.properties
         if fps <= 0: fps = 24.0
         total_frames = len(timestamps)
         display_aspect_ratio = self.display_aspect_ratio
@@ -395,29 +394,36 @@ class VideoExtractor:
         hdr_type = self.detect_hdr_type() if hdr_tonemap else None
         hdr_filters = self._build_hdr_filter_chain(hdr_algorithm, hdr_type) if hdr_tonemap else ""
         
+        filters = [hdr_filters] if hdr_tonemap else []
+        if fast_preview:
+            filters.append("scale=480:-1")
+        if not hdr_tonemap:
+            filters.append("format=yuv420p")
+        vf_filter = ",".join(filters)
+        q_scale = '5' if fast_preview else '2'
+
+        def cancelled():
+            return cancel_event is not None and cancel_event.is_set()
+
+        def frame_path(i, ts):
+            return os.path.join(output_folder, f"thumb_{i:03d}_ts{ts:.2f}.{ext}")
+
+        def metadata(i, ts, frame_number):
+            return {
+                'frame_path': frame_path(i, ts),
+                'frame_number': frame_number,
+                'timestamp_sec': ts,
+                'video_filename': self.video_filename,
+                'video_path': os.path.abspath(self.video_path),
+                **({'aspect_ratio': display_aspect_ratio} if display_aspect_ratio else {}),
+            }
+
         def extract_one(i, ts):
-            if cancel_event is not None and cancel_event.is_set():
+            if cancelled():
                 return None
             if not fast_preview:
                 self.logger.info(f"  ... Extracting frame {i+1}/{total_frames} at {ts:.2f}s ...")
-
-            # Construct Filter Chain
-            filters = []
-            if hdr_tonemap:
-                filters.append(hdr_filters)
-
-            if fast_preview:
-                filters.append("scale=480:-1")
-
-            # Ensure standard pixel format for output if not handled by tone mapper
-            if not hdr_tonemap:
-                filters.append("format=yuv420p")
-
-            vf_filter = ",".join(filters)
-            q_scale = '5' if fast_preview else '2'
-
-            final_name = f"thumb_{i:03d}_ts{ts:.2f}.{ext}"
-            final_path = os.path.join(output_folder, final_name)
+            final_path = frame_path(i, ts)
             
             cmd = [FFMPEG_BIN]
             if use_gpu:
@@ -438,14 +444,7 @@ class VideoExtractor:
             success = VideoUtils.run_ffmpeg_command(cmd, self.logger, cancel_event=cancel_event)
 
             if success and os.path.exists(final_path):
-                return {
-                    'frame_path': final_path,
-                    'frame_number': int(ts * fps),
-                    'timestamp_sec': ts,
-                    'video_filename': self.video_filename,
-                    'video_path': os.path.abspath(self.video_path),
-                    **({'aspect_ratio': display_aspect_ratio} if display_aspect_ratio else {}),
-                }
+                return metadata(i, ts, int(ts * fps))
             return None
 
         max_workers = 1
@@ -460,21 +459,55 @@ class VideoExtractor:
                 max_workers = min(4, total_frames, os.cpu_count() or 1)
 
         if max_workers == 1:
-            for i, ts in enumerate(timestamps):
-                result = extract_one(i, ts)
-                if result:
-                    results.append(result)
+            results = [extract_one(i, ts) for i, ts in enumerate(timestamps)]
         else:
             self.logger.info(f"  Extracting frames with {max_workers} parallel FFmpeg workers.")
             with ThreadPoolExecutor(max_workers=max_workers) as executor:
                 futures = [executor.submit(extract_one, i, ts) for i, ts in enumerate(timestamps)]
-                for future in as_completed(futures):
-                    result = future.result()
-                    if result:
-                        results.append(result)
+                results = [future.result() for future in futures]
 
-        results.sort(key=lambda x: x['timestamp_sec'])
-        return results
+        missing = [(i, ts) for i, ts in enumerate(timestamps) if results[i] is None]
+        if missing and not cancelled():
+            # Average FPS can't locate EOF on VFR sources. Recover the actual
+            # last decoded image once, then fill only requests past its PTS.
+            with tempfile.TemporaryDirectory(dir=output_folder) as tail_dir:
+                tail_path = os.path.join(tail_dir, f"last.{ext}")
+                last_pts = self._extract_video_tail(tail_path, vf_filter, q_scale, cancel_event)
+                if last_pts is not None:
+                    last_number = frame_count - 1 if frame_count > 0 else round(last_pts * fps)
+                    for i, ts in missing:
+                        if cancelled():
+                            break
+                        if ts >= last_pts:
+                            self.logger.info("  Using final frame at %.3fs for request at %.3fs.", last_pts, ts)
+                            shutil.copyfile(tail_path, frame_path(i, ts))
+                            results[i] = metadata(i, ts, last_number)
+
+        return sorted((item for item in results if item is not None), key=lambda item: item['timestamp_sec'])
+
+    def _extract_video_tail(self, output_path, vf_filter, q_scale, cancel_event):
+        """Decode to EOF and return the last image's presentation time."""
+        # Prefer a short tail seek. Container duration can include trailing
+        # audio, or seeking may be unsupported, so allow a full decode retry.
+        for seek in (['-sseof', '-2'], []):
+            if cancel_event is not None and cancel_event.is_set():
+                return None
+            Path(output_path).unlink(missing_ok=True)
+            output = {}
+            cmd = [
+                FFMPEG_BIN, '-hide_banner', '-nostats', '-loglevel', 'info',
+                '-copyts', '-start_at_zero', *seek, '-i', self.video_path,
+                '-vf', f'{vf_filter},showinfo', '-vsync', '0',
+                '-q:v', q_scale, '-update', '1', '-y', output_path,
+            ]
+            if VideoUtils.run_ffmpeg_command_with_control(
+                    cmd, self.logger, cancel_event=cancel_event, captured_output=output
+            ) and os.path.isfile(output_path):
+                timestamps = re.findall(rb'\bpts_time:\s*(-?\d+(?:\.\d+)?(?:[eE][+-]?\d+)?)',
+                                        output['stderr'])
+                if timestamps:
+                    return float(timestamps[-1])
+        return None
 
     def extract_shots(self, output_folder: str, threshold: float = 27.0, ext: str = "jpg",
                       start_time: float = 0.0, end_time: Optional[float] = None,
@@ -553,11 +586,10 @@ class VideoExtractor:
         )
         
         final_results = []
-        meta_map = {round(m['timestamp_sec'], 2): m for m in extracted_meta}
+        meta_map = {m['timestamp_sec']: m for m in extracted_meta}
         
         for shot in detected_shots:
-            ts_key = round(shot['timestamp_sec'], 2)
-            meta = meta_map.get(ts_key)
+            meta = meta_map.get(shot['timestamp_sec'])
             if meta:
                 meta['duration_frames'] = shot['duration_frames']
                 meta['scene_start_sec'] = shot['scene_start_sec']
@@ -588,7 +620,10 @@ class VideoExtractor:
             interval_sec = 1.0
         filters = []
         use_variable_frame_rate = False
-        if interval_sec: filters.append(f"fps=1/{interval_sec:.5f}")
+        if interval_sec:
+            # Keep the initial sample even if the clip ends before half an
+            # interval, when the FPS filter would round its duration to zero.
+            filters.append(f"fps=1/{interval_sec:.5f}:eof_action=pass")
         elif interval_frames:
             filters.append(f"select='not(mod(n,{interval_frames}))'")
             use_variable_frame_rate = True

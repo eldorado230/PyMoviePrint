@@ -4,9 +4,14 @@ on:
   push:
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref_type == 'branch' || github.event_name == 'pull_request' }}
+
 jobs:
   tests:
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -16,6 +21,8 @@ jobs:
           - os: ubuntu-latest
             python-version: '3.11'
           - os: windows-latest
+            python-version: '3.11'
+          - os: macos-latest
             python-version: '3.11'
 
     steps:
@@ -35,10 +42,22 @@ jobs:
         if: runner.os == 'Windows'
         run: choco install ffmpeg -y --no-progress
 
+      - name: Install FFmpeg on macOS
+        if: runner.os == 'macOS'
+        run: brew install ffmpeg
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
           python -m pip install -r requirements.txt pytest
 
       - name: Run tests
-        run: python -m pytest -q
+        run: python -m pytest -q -ra --junitxml=pytest-results.xml
+
+      - name: Retain pytest failure details
+        if: failure() && hashFiles('pytest-results.xml') != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: pytest-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: pytest-results.xml
+          retention-days: 14

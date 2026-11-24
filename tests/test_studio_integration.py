@@ -1,4 +1,5 @@
 import logging
+import json
 import shutil
 import subprocess
 import sys
@@ -19,7 +20,7 @@ from dataclasses import asdict
 def clip(tmp_path):
     if not shutil.which(vp.FFMPEG_BIN):
         pytest.skip('FFmpeg is not installed')
-    path = tmp_path / 'two-scenes.mp4'
+    path = tmp_path / 'two; scenes.mp4'
     subprocess.run([vp.FFMPEG_BIN, '-hide_banner', '-loglevel', 'error', '-y',
                     '-f', 'lavfi', '-i', 'color=c=red:s=160x90:r=25:d=1',
                     '-f', 'lavfi', '-i', 'color=c=blue:s=160x90:r=25:d=1',
@@ -91,16 +92,18 @@ def test_real_export_format_and_layout_matrix(clip, tmp_path, mode, extension):
 
 @pytest.mark.parametrize('transfer,kind', [('smpte2084', 'PQ'), ('arib-std-b67', 'HLG')])
 def test_real_hdr_detection_and_tonemapping(tmp_path, transfer, kind):
-    path = tmp_path / f'{kind}.mp4'
+    path = tmp_path / f'{kind}.mkv'
     subprocess.run([vp.FFMPEG_BIN, '-hide_banner', '-loglevel', 'error', '-y',
         '-f', 'lavfi', '-i', 'testsrc2=size=160x90:rate=25:duration=1',
-        '-c:v', 'libx265', '-pix_fmt', 'yuv420p10le', '-color_primaries', 'bt2020',
-        '-color_trc', transfer, '-colorspace', 'bt2020nc', '-x265-params',
-        f'colorprim=9:transfer={16 if kind == "PQ" else 18}:colormatrix=9', str(path)],
+        '-vf', f'format=yuv420p10le,setparams=color_primaries=bt2020:color_trc={transfer}:colorspace=bt2020nc',
+        '-c:v', 'ffv1', '-level', '3', str(path)],
         check=True, capture_output=True, timeout=30)
     probe = subprocess.run([vp.FFPROBE_BIN, '-v', 'error', '-show_streams', '-of', 'json', str(path)],
                            capture_output=True, text=True, check=True, timeout=10)
-    assert transfer in probe.stdout, probe.stdout
+    stream = json.loads(probe.stdout)['streams'][0]
+    assert (stream['pix_fmt'], stream['color_primaries'], stream['color_transfer'], stream['color_space']) == (
+        'yuv420p10le', 'bt2020', transfer, 'bt2020nc'
+    )
     with vp.VideoExtractor(str(path), logging.getLogger('hdr')) as extractor:
         assert extractor.detect_hdr_type() == kind
     ok, frames = vp.extract_frames_from_timestamps(str(path), [0.25],

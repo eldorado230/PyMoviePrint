@@ -229,7 +229,13 @@ Theme.apply_preset("Teal")
 def setup_file_logging():
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
-    
+
+    console = sys.stdout if sys.stdout is not None else sys.stderr
+    if console is not None:
+        console_handler = logging.StreamHandler(console)
+        console_handler.setLevel(logging.INFO)
+        root_logger.addHandler(console_handler)
+
     log_dir = os.path.expanduser(os.path.join("~", ".pymovieprint", "logs"))
     try:
         os.makedirs(log_dir, exist_ok=True)
@@ -237,12 +243,8 @@ def setup_file_logging():
         handler = RotatingFileHandler(log_file, maxBytes=5*1024*1024, backupCount=3, encoding='utf-8')
         handler.setFormatter(logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s'))
         root_logger.addHandler(handler)
-    except Exception as e:
-        print(f"Failed to create user profile log: {e}")
-
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setLevel(logging.INFO)
-    root_logger.addHandler(console_handler)
+    except OSError as error:
+        root_logger.warning("Could not open the PyMoviePrint log: %s", error)
 
     for module_name, error_detail, error_traceback in DependencyManager.LOAD_FAILURES:
         root_logger.error(
@@ -258,6 +260,41 @@ def setup_file_logging():
             return
         logging.critical("Uncaught exception", exc_info=(exc_type, exc_value, exc_traceback))
     sys.excepthook = handle_exception
+
+
+def _write_gui_settings(path, settings):
+    """Commit one complete settings snapshot, even with multiple editors."""
+    target = os.path.abspath(path)
+    payload = json.dumps(settings, indent=4)
+    pending = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode='w', encoding='utf-8', dir=os.path.dirname(target),
+            prefix='.pymovieprint-settings-', suffix='.tmp', delete=False,
+        ) as handle:
+            pending = handle.name
+            handle.write(payload)
+            handle.flush()
+            os.fsync(handle.fileno())
+
+        # A Windows reader or another rename can briefly deny delete sharing.
+        # Retry the commit itself. Each writer owns its temporary file.
+        for delay in (0.025, 0.05, 0.1, 0.2, None):
+            try:
+                os.replace(pending, target)
+                pending = None
+                break
+            except PermissionError:
+                if os.name != 'nt' or delay is None:
+                    raise
+                time.sleep(delay)
+    finally:
+        if pending is not None:
+            try:
+                os.unlink(pending)
+            except OSError as error:
+                logging.getLogger(__name__).warning("Could not remove temporary settings: %s", error)
+
 
 class QueueHandler(logging.Handler):
     def __init__(self, queue_instance: queue.Queue):
@@ -826,7 +863,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
     def _read_persistent_ui_theme():
         try:
             if os.path.exists(SETTINGS_FILE):
-                with open(SETTINGS_FILE, 'r') as f:
+                with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
                     return json.load(f).get("ui_theme", "Teal")
         except Exception:
             pass
@@ -1571,7 +1608,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             var = getattr(self, var_name)
             val = var.get()
             if setting_key == 'input_paths' and isinstance(val, str):
-                val = [path.strip() for path in val.split(';') if path.strip()]
+                val = self._current_source_paths()
             self.state_manager.update_settings({setting_key: val}, commit=False)
         except Exception: pass
 
@@ -1649,8 +1686,10 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         for var_name, setting_key in self.settings_map.items():
             if hasattr(self, var_name) and hasattr(settings, setting_key):
                 val = getattr(settings, setting_key)
-                if setting_key == "input_paths" and isinstance(val, list): val = "; ".join(val)
-                getattr(self, var_name).set(val)
+                if setting_key == "input_paths" and isinstance(val, list):
+                    self._set_single_source_paths(val)
+                else:
+                    getattr(self, var_name).set(val)
         try:
             self.col_slider.set(settings.num_columns)
             self.row_slider.set(settings.num_rows)
@@ -1753,7 +1792,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             return
         self._sync_output_destination()
         try:
-            inputs = [p.strip() for p in self.input_paths_var.get().split(';') if p.strip()]
+            inputs = self._current_source_paths()
             if not inputs or not os.path.isfile(inputs[0]):
                 text = 'Select a video to preview its output path.'
             else:
@@ -1942,7 +1981,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
 
     def save_project_action(self):
         state = self.state_manager.get_state()
-        state.source_paths = [p.strip() for p in self.input_paths_var.get().split(';') if p.strip()]
+        state.source_paths = self._current_source_paths()
         state.settings.input_paths = list(state.source_paths)
         path = self.current_project_path
         if not path:
@@ -1979,9 +2018,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             self._prepare_loaded_project_frames(state)
             self.state_manager.replace_state(state)
             self.current_project_path = path if path.lower().endswith(".json") else None
-            self._internal_input_paths = list(state.source_paths or state.settings.input_paths)
-            state.settings.input_paths = list(self._internal_input_paths)
-            self.input_paths_var.set("; ".join(self._internal_input_paths))
+            state.settings.input_paths = list(state.source_paths or state.settings.input_paths)
             self.refresh_ui_from_state(state)
             self._refresh_sheet_controls()
             if state.thumbnail_metadata:
@@ -2166,7 +2203,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         item = self._selected_meta() or {}
         if item.get('video_path'):
             return item['video_path'] if os.path.isfile(item['video_path']) else ''
-        candidates = [p.strip() for p in self.input_paths_var.get().split(';') if p.strip()]
+        candidates = self._current_source_paths()
         return next((path for path in candidates if os.path.isfile(path)), "")
 
     def rename_sheet_action(self):
@@ -2641,7 +2678,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
             messagebox.showinfo("Mode Info", "Switch to 'Single Source' tab to preview tweaks.")
             return
 
-        input_paths = [p.strip() for p in self.input_paths_var.get().split(';') if p.strip()]
+        input_paths = self._current_source_paths()
         if not input_paths:
             messagebox.showerror("Preview Error", "Choose a video file before generating a preview.")
             return
@@ -3148,8 +3185,7 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
                 return
             final_input_list = self.batch_file_list
         else:
-            input_paths_str = self.input_paths_var.get()
-            final_input_list = [p.strip() for p in input_paths_str.split(';') if p.strip()]
+            final_input_list = self._current_source_paths()
             if not final_input_list:
                 messagebox.showerror("Input Error", "Please select video file(s).")
                 return
@@ -3352,6 +3388,18 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         self.queue.put(("progress", (current, total, filename)))
 
     # --- HELPERS ---
+    def _current_source_paths(self):
+        text = self.input_paths_var.get()
+        # Pickers, drops, settings and projects already have exact identities.
+        if text == "; ".join(self._internal_input_paths):
+            return list(self._internal_input_paths)
+        if ';' in text:
+            # A manually entered existing file or folder may contain the separator.
+            for candidate in (text, text.strip()):
+                if os.path.exists(candidate):
+                    return [candidate]
+        return [path.strip() for path in text.split(';') if path.strip()]
+
     def _set_single_source_paths(self, paths):
         """Update the text-bound source entry without clearing its StringVar."""
         self._internal_input_paths = [str(path) for path in paths if path]
@@ -3502,28 +3550,31 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         if not os.path.exists(SETTINGS_FILE): return
         try:
             self._loading_persistent_settings = True
-            with open(SETTINGS_FILE, 'r') as f:
+            with open(SETTINGS_FILE, 'r', encoding='utf-8') as f:
                 settings = json.load(f)
+            stored_paths = settings.get('input_paths_list')
+            if isinstance(stored_paths, list) and all(isinstance(path, str) for path in stored_paths):
+                self._set_single_source_paths(stored_paths)
+            else:
+                self._internal_input_paths = []
                 self.input_paths_var.set(settings.get("input_paths", ""))
-                if self.input_paths_var.get():
-                     self._internal_input_paths = [p.strip() for p in self.input_paths_var.get().split(';') if p.strip()]
-                for var_name, key in self.settings_map.items():
-                    if key in settings and hasattr(self, var_name):
-                        value = settings[key]
-                        if key == "ui_theme" and value not in Theme.PRESET_NAMES:
-                            value = "Teal"
-                        getattr(self, var_name).set(value)
-                self.col_slider.set(int(self.num_columns_var.get() or 5))
-                self.row_slider.set(int(self.num_rows_var.get() or 5))
-                if hasattr(self, 'layout_mode_seg'): self.layout_mode_seg.set(self.layout_mode_var.get())
-                if hasattr(self, 'extraction_mode_seg'): self.extraction_mode_seg.set(self.extraction_mode_var.get())
-                if hasattr(self, 'ui_theme_seg'): self.ui_theme_seg.set(self.ui_theme_var.get())
-                if hasattr(self, 'rotate_seg'): self.rotate_seg.set(str(self.rotate_thumbnails_var.get()))
-                if hasattr(self, 'format_seg'): self.format_seg.set(self.frame_format_var.get())
-                if hasattr(self, 'overwrite_seg'): self.overwrite_seg.set(self.overwrite_mode_var.get())
-                self.update_visibility_state()
-                self._toggle_naming_inputs()
-                self._toggle_hdr_options()
+            for var_name, key in self.settings_map.items():
+                if key != 'input_paths' and key in settings and hasattr(self, var_name):
+                    value = settings[key]
+                    if key == "ui_theme" and value not in Theme.PRESET_NAMES:
+                        value = "Teal"
+                    getattr(self, var_name).set(value)
+            self.col_slider.set(int(self.num_columns_var.get() or 5))
+            self.row_slider.set(int(self.num_rows_var.get() or 5))
+            if hasattr(self, 'layout_mode_seg'): self.layout_mode_seg.set(self.layout_mode_var.get())
+            if hasattr(self, 'extraction_mode_seg'): self.extraction_mode_seg.set(self.extraction_mode_var.get())
+            if hasattr(self, 'ui_theme_seg'): self.ui_theme_seg.set(self.ui_theme_var.get())
+            if hasattr(self, 'rotate_seg'): self.rotate_seg.set(str(self.rotate_thumbnails_var.get()))
+            if hasattr(self, 'format_seg'): self.format_seg.set(self.frame_format_var.get())
+            if hasattr(self, 'overwrite_seg'): self.overwrite_seg.set(self.overwrite_mode_var.get())
+            self.update_visibility_state()
+            self._toggle_naming_inputs()
+            self._toggle_hdr_options()
         except Exception as error:
             logging.getLogger(__name__).warning(
                 "Could not load saved GUI settings; using defaults: %s", error
@@ -3550,8 +3601,9 @@ class MoviePrintApp(ctk.CTk, TkinterDnD.DnDWrapper):
         for var_name, key in self.settings_map.items():
             if hasattr(self, var_name): settings[key] = getattr(self, var_name).get()
         try:
-            with open(SETTINGS_FILE, 'w') as f: json.dump(settings, f, indent=4)
-        except (OSError, TypeError) as error:
+            settings['input_paths_list'] = self._current_source_paths()
+            _write_gui_settings(SETTINGS_FILE, settings)
+        except (OSError, TypeError, ValueError) as error:
             logging.getLogger(__name__).warning("Could not save GUI settings: %s", error)
         if self.preview_temp_dir and os.path.exists(self.preview_temp_dir): self.temp_dirs_to_cleanup.append(self.preview_temp_dir)
         self._cleanup_garbage_dirs()
