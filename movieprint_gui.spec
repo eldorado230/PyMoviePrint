@@ -57,9 +57,13 @@ exe = EXE(
 )
 
 if sys.platform == 'darwin':
+    from runpy import run_path
+
+    app_version = run_path(os.path.join(SPECPATH, 'version.py'))['__version__']
     app = BUNDLE(
         exe,
         name='PyMoviePrint.app',
         icon=None,
         bundle_identifier='com.movieprint.gui',
+        version=app_version,
     )
