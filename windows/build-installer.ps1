@@ -57,6 +57,7 @@ try {
     $dist = Join-Path $work 'dist'
     Invoke-Checked $venvPython @(
         '-m','PyInstaller','--noconfirm','--onedir','--windowed','--name','PyMoviePrint',
+        '--icon',(Join-Path $root 'assets\movieprint-studio-v1.ico'),
         '--paths',$root,'--specpath',$work,'--workpath',(Join-Path $work 'work'),'--distpath',$dist,
         '--collect-all','customtkinter','--collect-all','tkinterdnd2',
         '--hidden-import','video_processing','--hidden-import','image_grid',

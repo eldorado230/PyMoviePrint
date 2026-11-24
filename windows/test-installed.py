@@ -144,6 +144,8 @@ def focus_window(window):
     try:
         win32gui.SetForegroundWindow(window)
     except pywintypes.error:
+        pass
+    if win32gui.GetForegroundWindow() != window:
         flags = win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_NOACTIVATE
         win32gui.SetWindowPos(window, win32con.HWND_TOPMOST, 0, 0, 0, 0, flags)
         try:
@@ -202,17 +204,9 @@ def edit_preview(engine, window, screenshot):
     find_label(engine, window, 'Included in export', screenshot)
 
 
-def open_player(engine, window, path):
-    # At 100% DPI Windows OCR can omit the narrow Fit/Player button labels.
-    # The Zoom label is a visible anchor in the same toolbar row.
-    x, y = find_label(engine, window, 'Zoom', path)
-    scale = ctypes.windll.user32.GetDpiForWindow(window) / 96
-    mouse_click((x + round(275 * scale), y))
-
-
 def check_playback(engine, window, app, ffplay, video, environment, log):
     root = video.parent
-    open_player(engine, window, root / 'player-control.png')
+    click_label(engine, window, 'Open player', root / 'player-control.png')
     player = wait_for(lambda: find_window(app.pid, 'Player - '), 'bundled video player window')
     monitor = win32api.MonitorFromWindow(player, win32con.MONITOR_DEFAULTTONEAREST)
     left, top, right, bottom = win32api.GetMonitorInfo(monitor)['Work']

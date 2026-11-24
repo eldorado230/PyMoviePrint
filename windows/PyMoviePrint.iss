@@ -27,6 +27,7 @@ CloseApplications=yes
 RestartApplications=no
 ChangesAssociations=yes
 UninstallDisplayIcon={app}\PyMoviePrint.exe
+SetupIconFile=..\assets\movieprint-studio-v1.ico
 WizardStyle=modern
 
 [Tasks]
