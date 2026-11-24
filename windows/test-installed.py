@@ -94,6 +94,7 @@ def mouse_click(point):
     win32api.SetCursorPos(point)
     time.sleep(.15)
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0)
+    time.sleep(.05)
     win32api.mouse_event(win32con.MOUSEEVENTF_LEFTUP, 0, 0, 0, 0)
 
 
@@ -147,9 +148,23 @@ def close_window(app, window):
 
 def dismiss_export_confirmation(app):
     dialog = wait_for(lambda: find_window(app.pid, 'Generation Complete'), 'successful export confirmation')
-    okay = win32gui.GetDlgItem(dialog, 1)
-    win32gui.PostMessage(okay, win32con.BM_CLICK, 0, 0)
+    win32gui.PostMessage(dialog, win32con.WM_CLOSE, 0, 0)
     wait_for(lambda: not win32gui.IsWindowVisible(dialog), 'export confirmation dismissed')
+
+
+def export_png(engine, window, screenshot, log, result):
+    marker = 'Starting PyMoviePrint generation process'
+    initial = log.read_text(encoding='utf-8').count(marker) if log.exists() else 0
+    for _ in range(2):
+        click_label(engine, window, 'Export movieprint', screenshot)
+        try:
+            wait_for(lambda: result.exists() or (log.exists() and log.read_text(encoding='utf-8').count(marker) > initial),
+                     'export to begin', 4)
+            break
+        except AssertionError:
+            if result.exists():
+                break
+    wait_for(result.exists, 'packaged PNG export')
 
 
 def digest(path):
@@ -210,9 +225,8 @@ def main(root, baseline, setup):
         wait_for(lambda: log.exists() and 'Extracting frame 25/25' in log.read_text(encoding='utf-8'),
                  '25th thumbnail in the packaged app log')
         find_label(engine, window, 'Preview ready', root / 'contact-sheet-preview.png')
-        click_label(engine, window, 'Export movieprint', root / 'export-control.png')
         result = root / 'Acceptance; Sample_acceptance.png'
-        wait_for(result.exists, 'packaged PNG export')
+        export_png(engine, window, root / 'export-control.png', log, result)
         with Image.open(result) as image:
             assert image.format == 'PNG'
             image.verify()
@@ -233,6 +247,7 @@ def main(root, baseline, setup):
         # Decode the fixture audio on its own as well as playing the AV file through the GUI.
         subprocess.run([ffplay, '-v', 'error', '-autoexit', '-nodisp', str(video)], check=True,
                        env=environment, timeout=15, capture_output=True)
+        print('Installed FFplay completed GUI audio/video playback and audio-only decoding with the SDL dummy device.')
         close_window(first, window)
     finally:
         if first.poll() is None:
@@ -257,8 +272,7 @@ def main(root, baseline, setup):
     second = subprocess.Popen([installed_exe], cwd=root, env=environment)
     try:
         window = wait_for(lambda: find_window(second.pid, 'PyMoviePrint v1.1.1'), 'upgraded PyMoviePrint window')
-        click_label(engine, window, 'Export movieprint', root / 'export-after-upgrade.png')
-        wait_for(result.exists, 'export using restored settings')
+        export_png(engine, window, root / 'export-after-upgrade.png', log, result)
         dismiss_export_confirmation(second)
         close_window(second, window)
     finally:
