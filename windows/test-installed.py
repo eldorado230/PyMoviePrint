@@ -210,20 +210,17 @@ def open_player(engine, window, path):
     mouse_click((x + round(275 * scale), y))
 
 
-def play_with_audio(window, path):
-    focus_window(window)
-    left, top, right, bottom = win32gui.GetWindowRect(window)
-    ImageGrab.grab(bbox=(max(left, 0), max(top, 0), right, bottom)).save(path)
-    scale = ctypes.windll.user32.GetDpiForWindow(window) / 96
-    # Audio player is the rightmost control in the centred player footer.
-    mouse_click((round((left + right) / 2 + 235 * scale), bottom - round(32 * scale)))
-
-
 def check_playback(engine, window, app, ffplay, video, environment, log):
     root = video.parent
     open_player(engine, window, root / 'player-control.png')
     player = wait_for(lambda: find_window(app.pid, 'Player - '), 'bundled video player window')
-    play_with_audio(player, root / 'audio-control.png')
+    monitor = win32api.MonitorFromWindow(player, win32con.MONITOR_DEFAULTTONEAREST)
+    left, top, right, bottom = win32api.GetMonitorInfo(monitor)['Work']
+    x, y, player_right, player_bottom = win32gui.GetWindowRect(player)
+    # The player's natural size can put its footer below the runner's small desktop.
+    win32gui.MoveWindow(player, left, top, min(player_right - x, right - left),
+                        min(player_bottom - y, bottom - top), True)
+    click_label(engine, player, 'Audio player', root / 'audio-control.png')
     playback = wait_for(lambda: next(
         (process for process in app.children() if Path(process.exe()) == ffplay), None
     ), 'installed FFplay child')
