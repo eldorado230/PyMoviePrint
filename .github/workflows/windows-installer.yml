@@ -53,7 +53,7 @@ jobs:
         run: |
           python -m pip install -r windows/acceptance-requirements.txt
           if ($LASTEXITCODE -ne 0) { throw 'Test dependency installation failed' }
-          python windows/test-installed.py (Join-Path $env:RUNNER_TEMP 'pymovieprint-acceptance') dist/windows-installer-rc/PyMoviePrint-Setup-Baseline.exe dist/windows-installer-rc/PyMoviePrint-Setup.exe
+          python windows/test-installed.py (Join-Path $env:RUNNER_TEMP 'pymovieprint-acceptance') dist/windows-installer-rc/revision-3/PyMoviePrint-Setup-Baseline.exe dist/windows-installer-rc/revision-3/PyMoviePrint-Setup.exe
           exit $LASTEXITCODE
       - name: Retain evidence from the isolated test
         if: always()
@@ -64,7 +64,7 @@ jobs:
             ${{ runner.temp }}/pymovieprint-acceptance/*.png
             ${{ runner.temp }}/pymovieprint-acceptance/*.log
             ${{ runner.temp }}/pymovieprint-acceptance/profile/PyMoviePrint/logs/*.log
-            dist/windows-installer-rc/dependency-manifest.json
-            dist/windows-installer-rc/*.sha256
+            dist/windows-installer-rc/revision-3/dependency-manifest.json
+            dist/windows-installer-rc/revision-3/*.sha256
           if-no-files-found: warn
           retention-days: 7

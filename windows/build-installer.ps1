@@ -2,18 +2,21 @@
 param(
     [Parameter(Mandatory)][string]$Python,
     [Parameter(Mandatory)][string]$Iscc,
-    [ValidateRange(1, 99)][int]$Revision = 2,
+    [ValidateRange(3, 99)][int]$Revision = 3,
     [switch]$BuildUpgradeBaseline
 )
 
 $ErrorActionPreference = 'Stop'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $cache = Join-Path $root 'build\windows-installer'
-$venv = Join-Path $cache 'venv'
+$venv = Join-Path $cache 'venv-system-ucrt'
 $venvPython = Join-Path $venv 'Scripts\python.exe'
 $work = Join-Path $cache ('package-' + [guid]::NewGuid().ToString('N'))
-$output = Join-Path $root 'dist\windows-installer-rc'
+$output = Join-Path $root "dist\windows-installer-rc\revision-$Revision"
 $isccFullPath = (Get-Command $Iscc -CommandType Application).Source
+if (Test-Path -LiteralPath (Join-Path $output 'PyMoviePrint-Setup.exe')) {
+    throw "An installer already exists for revision $Revision. Use a new revision to preserve it."
+}
 New-Item -ItemType Directory -Force -Path $work, $output | Out-Null
 
 function Invoke-Checked {
@@ -28,6 +31,28 @@ try {
     if (-not (Test-Path -LiteralPath $venvPython)) {
         Invoke-Checked $Python @('-m', 'venv', $venv)
     }
+    $numpySource = Join-Path $cache 'numpy-1.26.4.tar.gz'
+    $numpySourceHash = '2a02aba9ed12e4ac4eb3ea9421c420301a0c6460d9830d74a9df87efa4912010'
+    if (-not (Test-Path -LiteralPath $numpySource)) {
+        $numpyUrl = 'https://files.pythonhosted.org/packages/65/6e/09db70a523a96d25e115e71cc56a6f9031e7b8cd166c1ac8438307c14058/numpy-1.26.4.tar.gz'
+        $download = Join-Path $work 'numpy-1.26.4.tar.gz'
+        Invoke-WebRequest -Uri $numpyUrl -OutFile $download
+        if ((Get-FileHash -LiteralPath $download).Hash.ToLowerInvariant() -ne $numpySourceHash) {
+            throw 'Downloaded NumPy source does not match the pinned SHA-256.'
+        }
+        Move-Item -LiteralPath $download -Destination $numpySource
+    }
+    if ((Get-FileHash -LiteralPath $numpySource).Hash.ToLowerInvariant() -ne $numpySourceHash) {
+        throw "NumPy source does not match the pinned SHA-256: $numpySource"
+    }
+    $wheelDirectory = Join-Path $work 'wheels'
+    Invoke-Checked $venvPython @(
+        '-m', 'pip', 'wheel', '--disable-pip-version-check', '--no-deps', '--wheel-dir', $wheelDirectory,
+        '-Csetup-args=--vsenv', '-Csetup-args=-Dblas=none', '-Csetup-args=-Dlapack=none',
+        '-Csetup-args=-Dallow-noblas=true', $numpySource
+    )
+    $numpyWheel = Get-Item -LiteralPath (Join-Path $wheelDirectory 'numpy-1.26.4-cp311-cp311-win_amd64.whl')
+    Invoke-Checked $venvPython @('-m', 'pip', 'install', '--disable-pip-version-check', '--force-reinstall', '--no-deps', $numpyWheel.FullName)
     Invoke-Checked $venvPython @('-m', 'pip', 'install', '--disable-pip-version-check', '-r', 'windows\build-requirements.txt')
     $dist = Join-Path $work 'dist'
     Invoke-Checked $venvPython @(
@@ -47,12 +72,13 @@ try {
     if ($LASTEXITCODE -ne 0 -or $version -notmatch '^\d+\.\d+\.\d+$') { throw 'Could not read app version' }
     $manifestPath = Join-Path $app 'dependency-manifest.json'
     $manifest = Get-Content -Raw -LiteralPath $manifestPath | ConvertFrom-Json
+    $manifest.numpy.source_sha256 = $numpySourceHash
+    $manifest.numpy.wheel_sha256 = (Get-FileHash -LiteralPath $numpyWheel.FullName).Hash.ToLowerInvariant()
     $manifest | Add-Member -NotePropertyName installer_compiler_version -NotePropertyValue '6.4.3'
     $manifest | Add-Member -NotePropertyName installer_compiler_sha256 -NotePropertyValue (Get-FileHash -LiteralPath $isccFullPath).Hash.ToLowerInvariant()
     $manifest | Add-Member -NotePropertyName installer_revision -NotePropertyValue ''
     $script = Join-Path $PSScriptRoot 'PyMoviePrint.iss'
     if ($BuildUpgradeBaseline) {
-        if ($Revision -lt 2) { throw 'A baseline requires a revision of at least 2' }
         $manifest.installer_revision = "$version.$($Revision - 1)"
         $manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
         Invoke-Checked $isccFullPath @(
@@ -64,6 +90,7 @@ try {
     $manifest | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath $manifestPath -Encoding UTF8
     Invoke-Checked $isccFullPath @('/Qp', "/DAppSource=$app", "/DPackageVersion=$($manifest.installer_revision)", "/O$output", $script)
     Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $output 'dependency-manifest.json') -Force
+    Copy-Item -LiteralPath $numpySource -Destination (Join-Path $output 'numpy-1.26.4.tar.gz')
     $setup = Get-Item -LiteralPath (Join-Path $output 'PyMoviePrint-Setup.exe')
     Write-Host "$($setup.FullName) ($($setup.Length) bytes)"
     $installerSha256 = (Get-FileHash -LiteralPath $setup.FullName).Hash.ToLowerInvariant()

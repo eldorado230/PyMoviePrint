@@ -274,6 +274,12 @@ def isolated_environment(root):
     return environment
 
 
+def installer_version(path):
+    info = win32api.GetFileVersionInfo(str(path), '\\')
+    high, low = info['FileVersionMS'], info['FileVersionLS']
+    return f'{high >> 16}.{high & 0xffff}.{low >> 16}.{low & 0xffff}'
+
+
 def main(root, baseline, setup):
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     from version import __version__
@@ -292,7 +298,7 @@ def main(root, baseline, setup):
     for dependency in ('python.exe', 'ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe'):
         assert shutil.which(dependency, path=environment['PATH']) is None, dependency
     installer(baseline, [f'/DIR={install}'], environment, root / 'install.log')
-    assert user_installation() == f'{__version__}.1'
+    assert user_installation() == installer_version(baseline)
     assert all(verb_value(extension, command=True) is None for extension in EXTENSIONS)
     ffmpeg, ffprobe, ffplay = (install / 'ffmpeg' / f'{name}.exe' for name in ('ffmpeg', 'ffprobe', 'ffplay'))
     video = root / 'Acceptance; Sample.mp4'
@@ -354,7 +360,15 @@ def main(root, baseline, setup):
     with winreg.CreateKey(winreg.HKEY_CURRENT_USER, verb_key('.wmv') + r'\command') as key:
         winreg.SetValueEx(key, '', 0, winreg.REG_SZ, foreign_command)
     installer(setup, ['/TASKS=explorer'], environment, root / 'upgrade.log')
-    assert user_installation() == f'{__version__}.2'
+    assert user_installation() == installer_version(setup)
+    manifest = json.loads((install / 'dependency-manifest.json').read_bytes())
+    assert manifest['windows_runtime']['system_ucrt']
+    assert manifest['numpy']['source_sha256'] and manifest['numpy']['wheel_sha256']
+    assert not any(
+        dll.name.lower() == 'ucrtbase.dll' or dll.name.lower().startswith(('api-ms-win-', 'ext-ms-win-'))
+        or any(name in dll.name.lower() for name in ('openblas', 'quadmath', 'gfortran'))
+        for dll in install.rglob('*.dll')
+    )
     assert all(digest(path) == checksum for path, checksum in original.items())
     for extension in EXTENSIONS[:-1]:
         assert verb_value(extension) == 'Create video contact sheet'

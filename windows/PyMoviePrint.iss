@@ -15,6 +15,7 @@ VersionInfoDescription=PyMoviePrint Windows Setup
 DefaultDirName={localappdata}\Programs\PyMoviePrint
 DefaultGroupName=PyMoviePrint
 PrivilegesRequired=lowest
+MinVersion=10.0
 ArchitecturesAllowed=x64os
 ArchitecturesInstallIn64BitMode=x64os
 DisableProgramGroupPage=yes

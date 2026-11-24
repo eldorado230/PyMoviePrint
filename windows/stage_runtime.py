@@ -21,6 +21,7 @@ OPENCV_IPP_ARCHIVE = (
     'a56b6ac6f030c312b2dce17430eef13aed9af274/ippicv/ippicv_2020_win_intel64_20191018_general.zip'
 )
 OPENCV_IPP_SHA256 = 'e64e09f8a2e121d4fff440fb12b1298bc0760f1391770aefe5d1deb6630352b7'
+VC_RUNTIME = re.compile(r'^(?:vcruntime|msvcp|msvcr\d|concrt|vcomp|mfc).*\.dll$')
 
 
 def sha256(path):
@@ -182,6 +183,91 @@ def opencv_runtime(app, cache, notices):
     }
 
 
+def numpy_runtime(app):
+    import numpy
+
+    config = numpy.show_config(mode='dicts')
+    dependencies = config['Build Dependencies']
+    if (dependencies['blas'].get('found')
+            or dependencies['lapack'].get('detection method') != 'internal'):
+        raise ValueError('Expected NumPy with its internal BLAS and LAPACK fallback routines.')
+    unwanted = [
+        path.name for path in app.rglob('*.dll')
+        if any(name in path.name.lower() for name in ('openblas', 'quadmath', 'gfortran'))
+    ]
+    if unwanted:
+        raise ValueError(f'Unexpected external NumPy runtime files: {unwanted}')
+    return {
+        'version': numpy.__version__,
+        'build_dependencies': dependencies,
+        'source_sha256': None,
+        'wheel_sha256': None,
+    }
+
+
+def windows_runtime(app):
+    import pefile
+
+    system_libraries = {}
+    vc_libraries = {}
+    vc_exports = {}
+    for path in sorted(app.rglob('*.dll')):
+        name = path.name.lower()
+        if name == 'ucrtbase.dll' or name.startswith(('api-ms-win-', 'ext-ms-win-')):
+            system_libraries[path.relative_to(app).as_posix()] = sha256(path)
+            path.unlink()
+        elif VC_RUNTIME.match(name):
+            if name not in {'vcruntime140.dll', 'vcruntime140_1.dll'}:
+                raise ValueError(f'Review the redistribution terms for this new runtime: {path.name}')
+            source = Path(sys.base_prefix) / name
+            digest = sha256(path)
+            if not source.is_file() or digest != sha256(source):
+                raise ValueError(f'{path.name} differs from the runtime supplied with the build Python.')
+            with pefile.PE(str(path), fast_load=True) as binary:
+                if binary.FILE_HEADER.Machine != 0x8664:
+                    raise ValueError(f'Expected an x64 Microsoft runtime: {path.name}')
+                binary.parse_data_directories(directories=[pefile.DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_EXPORT']])
+                vc_exports[name] = {entry.name or entry.ordinal for entry in binary.DIRECTORY_ENTRY_EXPORT.symbols}
+            vc_libraries[path.relative_to(app).as_posix()] = {
+                'sha256': digest,
+                'source': f'Build Python installation, {name}',
+            }
+    if not vc_libraries:
+        raise ValueError('Expected the Microsoft runtime supplied with the bundled Python.')
+
+    runtime_importers = {name: [] for name in vc_exports}
+    directories = [
+        pefile.DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_IMPORT'],
+        pefile.DIRECTORY_ENTRY['IMAGE_DIRECTORY_ENTRY_DELAY_IMPORT'],
+    ]
+    for path in sorted(app.rglob('*')):
+        if path.suffix.lower() not in {'.exe', '.dll', '.pyd'} or not path.is_file():
+            continue
+        with pefile.PE(str(path), fast_load=True) as binary:
+            if binary.FILE_HEADER.Machine != 0x8664:
+                continue
+            binary.parse_data_directories(directories=directories)
+            imports = (
+                *getattr(binary, 'DIRECTORY_ENTRY_IMPORT', ()),
+                *getattr(binary, 'DIRECTORY_ENTRY_DELAY_IMPORT', ()),
+            )
+        for library in imports:
+            name = library.dll.decode('ascii').lower()
+            if VC_RUNTIME.match(name):
+                symbols = {entry.name or entry.ordinal for entry in library.imports}
+                missing = symbols - vc_exports.get(name, set())
+                if missing:
+                    raise ValueError(f'{path.name} needs unavailable exports from {name}: {missing}')
+                runtime_importers[name].append(path.relative_to(app).as_posix())
+    return {
+        'system_ucrt': True,
+        'omitted_system_libraries': system_libraries,
+        'bundled_visual_cpp_libraries': vc_libraries,
+        'verified_visual_cpp_importers': runtime_importers,
+        'redistribution_terms': 'https://learn.microsoft.com/cpp/windows/redistributing-visual-cpp-files',
+    }
+
+
 def main():
     app, cache = (Path(value).resolve() for value in sys.argv[1:3])
     notices = app / 'licenses'
@@ -193,7 +279,9 @@ def main():
         'build_packages': python_notices(notices),
         'ffmpeg': ffmpeg_runtime(app, cache, notices),
         'opencv': opencv_runtime(app, cache, notices),
-        'distribution_status': 'Private candidate. Public distribution pending corresponding-source delivery.',
+        'numpy': numpy_runtime(app),
+        'windows_runtime': windows_runtime(app),
+        'distribution_status': 'Private candidate. Public distribution pending owner approval, source delivery, and Microsoft runtime terms.',
     }
     (app / 'dependency-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
 
