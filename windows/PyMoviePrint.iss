@@ -1,14 +1,19 @@
 #if (Ver >> 8) != 0x060403
-  #error This prototype requires Inno Setup 6.4.3.
+  #error PyMoviePrint requires Inno Setup 6.4.3.
 #endif
 
 [Setup]
-AppId={{A723B754-7B1E-4C1F-9F8B-64A1A9A411F2}
-AppName=PyMoviePrint Windows Prototype
+AppId={{139498E8-C648-4E75-839A-2B924CD6DC1C}
+AppName=PyMoviePrint
 AppVersion={#PackageVersion}
 AppPublisher=PyMoviePrint
-DefaultDirName={localappdata}\Programs\PyMoviePrintPrototype
-DefaultGroupName=PyMoviePrint Windows Prototype
+AppPublisherURL=https://github.com/eldorado230/PyMoviePrint
+AppSupportURL=https://github.com/eldorado230/PyMoviePrint/issues
+VersionInfoVersion={#PackageVersion}
+VersionInfoProductName=PyMoviePrint
+VersionInfoDescription=PyMoviePrint Windows Setup
+DefaultDirName={localappdata}\Programs\PyMoviePrint
+DefaultGroupName=PyMoviePrint
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64os
 ArchitecturesInstallIn64BitMode=x64os
@@ -26,4 +31,4 @@ WizardStyle=modern
 Source: "{#AppSource}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
 [Icons]
-Name: "{userprograms}\PyMoviePrint Windows Prototype"; Filename: "{app}\PyMoviePrint.exe"; WorkingDir: "{app}"
+Name: "{userprograms}\PyMoviePrint"; Filename: "{app}\PyMoviePrint.exe"; WorkingDir: "{app}"

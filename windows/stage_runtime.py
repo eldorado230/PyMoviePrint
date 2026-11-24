@@ -14,6 +14,8 @@ import zipfile
 
 ROOT = Path(__file__).resolve().parent.parent
 NOTICE = re.compile(r'^(licen[sc]e|copying|notice|credits)', re.IGNORECASE)
+OPENCV_VERSION = '4.7.0.72'
+OPENCV_PLUGIN_SHA256 = '3552d34215ba2ea22ce68c54b0bee03b857610ebc30e102f6c982b3e415a159c'
 
 
 def sha256(path):
@@ -120,6 +122,39 @@ def python_notices(notices):
     return packages
 
 
+def opencv_runtime(app, notices):
+    distribution = metadata.distribution('opencv-python')
+    if distribution.version != OPENCV_VERSION:
+        raise ValueError('Review OpenCV source provenance before updating the Windows wheel.')
+    plugins = list(app.rglob('opencv_videoio_ffmpeg*.dll'))
+    if len(plugins) != 1 or sha256(plugins[0]) != OPENCV_PLUGIN_SHA256:
+        raise ValueError('Packaged OpenCV FFmpeg plugin does not match the audited upstream binary.')
+    recipe = 'https://github.com/opencv/opencv_3rdparty/tree/7dd0d4f1d6fe75f05f3d3b5e38cbc96c1a2d2809/ffmpeg'
+    source = {
+        'wheel_build_scripts': 'https://github.com/opencv/opencv-python/tree/f9de34ec8bc8bc5d61e5e35c0721676993da7d71',
+        'wheel_opencv_source': 'https://github.com/opencv/opencv/tree/725e440d278aca07d35a5e8963ef990572b07316',
+        'plugin_build_scripts': recipe,
+        'plugin_opencv_source': 'https://github.com/opencv/opencv/tree/4abe6dc48d4ec6229f332cc6cf6c7e234ac8027e',
+        'plugin_ffmpeg_source': 'https://github.com/FFmpeg/FFmpeg/tree/n4.4.3',
+        'plugin_aom_source': 'https://aomedia.googlesource.com/aom/+/refs/tags/v3.5.0',
+        'plugin_libvpx_source': 'https://chromium.googlesource.com/webm/libvpx/+/refs/tags/v1.12.0',
+        'plugin_openh264_headers': 'https://github.com/cisco/openh264/tree/v1.8.0/codec/api/svc',
+    }
+    (notices / 'opencv-python' / 'SOURCE.txt').write_text(
+        'OpenCV and its separate FFmpeg plugin source references from the upstream build recipe:\n'
+        + ''.join(f'{component}: {url}\n' for component, url in source.items())
+        + 'The source archives must accompany a public distribution.\n',
+        encoding='utf-8',
+    )
+    return {
+        'wheel_version': distribution.version,
+        'plugin': plugins[0].relative_to(app).as_posix(),
+        'plugin_sha256': OPENCV_PLUGIN_SHA256,
+        'plugin_license': 'LGPL-2.1-or-later',
+        'source_references': source,
+    }
+
+
 def main():
     app, cache = (Path(value).resolve() for value in sys.argv[1:3])
     notices = app / 'licenses'
@@ -130,7 +165,8 @@ def main():
         'python': sys.version,
         'build_packages': python_notices(notices),
         'ffmpeg': ffmpeg_runtime(app, cache, notices),
-        'distribution_status': 'Internal prototype. Public redistribution review pending.',
+        'opencv': opencv_runtime(app, notices),
+        'distribution_status': 'Private candidate. Public distribution pending corresponding-source delivery.',
     }
     (app / 'dependency-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')
 

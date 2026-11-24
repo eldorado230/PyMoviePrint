@@ -27,7 +27,7 @@ from winrt.windows.media.ocr import OcrEngine
 from winrt.windows.storage import FileAccessMode, StorageFile
 
 
-UNINSTALL_KEY = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{A723B754-7B1E-4C1F-9F8B-64A1A9A411F2}_is1'
+UNINSTALL_KEY = r'Software\Microsoft\Windows\CurrentVersion\Uninstall\{139498E8-C648-4E75-839A-2B924CD6DC1C}_is1'
 
 
 def wait_for(check, label, seconds=35):
@@ -200,20 +200,24 @@ def isolated_environment(root):
 
 
 def main(root, baseline, setup):
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    from version import __version__
+
+    print(f'Candidate installer SHA-256: {digest(setup)}')
     ctypes.windll.user32.SetProcessDPIAware()
     engine = OcrEngine.try_create_from_user_profile_languages()
     assert engine is not None, 'The Windows runner lacks an OCR language.'
-    assert user_installation() is None, 'Use a disposable Windows user with no installed prototype.'
+    assert user_installation() is None, 'Use a disposable Windows user with no installed PyMoviePrint.'
     root.mkdir()
-    install = root / 'installed'
     local_data = root / 'profile'
     local_data.mkdir()
-    profile = local_data / 'PyMoviePrintPrototype'
+    install = local_data / 'Programs' / 'PyMoviePrint'
+    profile = local_data / 'PyMoviePrint'
     environment = isolated_environment(root)
     for dependency in ('python.exe', 'ffmpeg.exe', 'ffprobe.exe', 'ffplay.exe'):
         assert shutil.which(dependency, path=environment['PATH']) is None, dependency
     installer(baseline, [f'/DIR={install}'], environment, root / 'install.log')
-    assert user_installation() == '1.1.1.1'
+    assert user_installation() == f'{__version__}.1'
     ffmpeg, ffprobe, ffplay = (install / 'ffmpeg' / f'{name}.exe' for name in ('ffmpeg', 'ffprobe', 'ffplay'))
     video = root / 'Acceptance; Sample.mp4'
     subprocess.run([
@@ -226,18 +230,20 @@ def main(root, baseline, setup):
     ], env=environment, timeout=20)
     assert {item['codec_type'] for item in json.loads(probe)['streams']} == {'video', 'audio'}
 
-    profile.mkdir()
     settings = profile / 'movieprint_gui_settings.json'
-    settings.write_text(json.dumps({
+    legacy_settings = local_data / 'PyMoviePrintPrototype' / settings.name
+    legacy_settings.parent.mkdir()
+    legacy_settings.write_text(json.dumps({
         'input_paths_list': [str(video)],
         'num_rows': 5, 'num_columns': 5, 'frame_format': 'png',
         'output_filename_suffix': '_acceptance', 'ui_theme': 'Teal',
     }), encoding='utf-8')
+    legacy_checksum = digest(legacy_settings)
     log = profile / 'logs' / 'pymovieprint.log'
     installed_exe = install / 'PyMoviePrint.exe'
     first = subprocess.Popen([installed_exe], cwd=root, env=environment)
     try:
-        window = wait_for(lambda: find_window(first.pid, 'PyMoviePrint v1.1.1'), 'installed PyMoviePrint window')
+        window = wait_for(lambda: find_window(first.pid, f'PyMoviePrint v{__version__}'), 'installed PyMoviePrint window')
         click_label(engine, window, 'Build preview', root / 'build-preview.png')
         wait_for(lambda: log.exists() and 'Extracting frame 25/25' in log.read_text(encoding='utf-8'),
                  '25th thumbnail in the packaged app log')
@@ -275,20 +281,19 @@ def main(root, baseline, setup):
     assert session_settings['input_paths_list'] == [str(video)] and session_settings['frame_format'] == 'png'
     project = root / 'Existing work.pymovieprint.json'
     # Produce a genuine user project without modifying the installed application's files.
-    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
     import project_io
     from state_manager import ProjectState
     state = ProjectState(source_paths=[str(video)])
     project_io.save_project_json(str(project), state)
     original = {path: digest(path) for path in (settings, project, video, result)}
-    installer(setup, [f'/DIR={install}'], environment, root / 'upgrade.log')
-    assert user_installation() == '1.1.1.2'
+    installer(setup, [], environment, root / 'upgrade.log')
+    assert user_installation() == f'{__version__}.2'
     assert all(digest(path) == checksum for path, checksum in original.items())
     # Export after reopening without seeding settings again.
     result.unlink()
     second = subprocess.Popen([installed_exe], cwd=root, env=environment)
     try:
-        window = wait_for(lambda: find_window(second.pid, 'PyMoviePrint v1.1.1'), 'upgraded PyMoviePrint window')
+        window = wait_for(lambda: find_window(second.pid, f'PyMoviePrint v{__version__}'), 'upgraded PyMoviePrint window')
         export_png(engine, window, root / 'export-after-upgrade.png', log, result)
         dismiss_export_confirmation(second)
         close_window(second, window)
@@ -304,6 +309,7 @@ def main(root, baseline, setup):
     assert user_installation() is None
     assert all(digest(path) == original[path] for path in (project, video))
     assert json.loads(settings.read_text(encoding='utf-8'))['input_paths_list'] == [str(video)]
+    assert digest(legacy_settings) == legacy_checksum
     assert result.is_file()
     print('Restricted-token install, upgrade, relaunch, and uninstall passed. Project, media, export, and settings survived.')
 

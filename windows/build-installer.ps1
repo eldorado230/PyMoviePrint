@@ -12,7 +12,7 @@ $cache = Join-Path $root 'build\windows-installer'
 $venv = Join-Path $cache 'venv'
 $venvPython = Join-Path $venv 'Scripts\python.exe'
 $work = Join-Path $cache ('package-' + [guid]::NewGuid().ToString('N'))
-$output = Join-Path $root 'dist\windows-installer'
+$output = Join-Path $root 'dist\windows-installer-rc'
 $isccFullPath = (Get-Command $Iscc -CommandType Application).Source
 New-Item -ItemType Directory -Force -Path $work, $output | Out-Null
 
@@ -66,7 +66,9 @@ try {
     Copy-Item -LiteralPath $manifestPath -Destination (Join-Path $output 'dependency-manifest.json') -Force
     $setup = Get-Item -LiteralPath (Join-Path $output 'PyMoviePrint-Setup.exe')
     Write-Host "$($setup.FullName) ($($setup.Length) bytes)"
-    Write-Host "SHA-256 $((Get-FileHash -LiteralPath $setup.FullName).Hash.ToLowerInvariant())"
+    $installerSha256 = (Get-FileHash -LiteralPath $setup.FullName).Hash.ToLowerInvariant()
+    "$installerSha256  $($setup.Name)" | Set-Content -LiteralPath ($setup.FullName + '.sha256') -Encoding ascii
+    Write-Host "SHA-256 $installerSha256"
 } finally {
     Pop-Location
     $resolvedWork = (Resolve-Path -LiteralPath $work).Path

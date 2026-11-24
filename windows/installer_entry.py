@@ -1,9 +1,48 @@
-"""Initialise the per-user Windows prototype before starting the existing GUI."""
+"""Initialise the per-user Windows installation before starting the GUI."""
 
 import ctypes
+import json
+import logging
 import os
 from pathlib import Path
 import sys
+import tempfile
+
+
+SETTINGS_NAME = 'movieprint_gui_settings.json'
+
+
+def migrate_settings(source, destination):
+    """Copy the prototype settings once, even if two launches race."""
+    if destination.exists():
+        return False
+    temporary_path = None
+    try:
+        try:
+            payload = source.read_bytes()
+        except FileNotFoundError:
+            return False
+        if not isinstance(json.loads(payload.decode('utf-8')), dict):
+            raise ValueError('expected a JSON object')
+        with tempfile.NamedTemporaryFile(dir=destination.parent, prefix='.settings-', delete=False) as temporary:
+            temporary_path = Path(temporary.name)
+            temporary.write(payload)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+        try:
+            os.link(temporary_path, destination)
+        except FileExistsError:
+            return False
+        return True
+    except (OSError, ValueError) as error:
+        logging.getLogger(__name__).warning('Could not migrate prototype settings: %s', error)
+        return False
+    finally:
+        if temporary_path is not None:
+            try:
+                temporary_path.unlink(missing_ok=True)
+            except OSError as error:
+                logging.getLogger(__name__).warning('Could not remove temporary settings: %s', error)
 
 
 def main():
@@ -14,7 +53,8 @@ def main():
         for tool in tools.values():
             if not tool.is_file():
                 raise FileNotFoundError(f'Installed media executable missing: {tool.name}. Reinstall PyMoviePrint.')
-        profile = Path(os.environ['LOCALAPPDATA']) / 'PyMoviePrintPrototype'
+        local_data = Path(os.environ['LOCALAPPDATA'])
+        profile = local_data / 'PyMoviePrint'
         profile.mkdir(parents=True, exist_ok=True)
         import movieprint_gui as gui
 
@@ -23,8 +63,9 @@ def main():
             video.FFMPEG_BIN = os.fspath(tools['ffmpeg'])
             video.FFPROBE_BIN = os.fspath(tools['ffprobe'])
             video.FFPLAY_BIN = os.fspath(tools['ffplay'])
-        gui.SETTINGS_FILE = profile / 'movieprint_gui_settings.json'
+        gui.SETTINGS_FILE = profile / SETTINGS_NAME
         gui.setup_file_logging(profile / 'logs')
+        migrate_settings(local_data / 'PyMoviePrintPrototype' / SETTINGS_NAME, gui.SETTINGS_FILE)
         app = gui.MoviePrintApp()
         app.mainloop()
     except Exception as error:
