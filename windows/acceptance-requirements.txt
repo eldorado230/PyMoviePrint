@@ -1,0 +1,7 @@
+Pillow==10.0.0
+psutil
+pywin32
+winrt-Windows.Media.Ocr
+winrt-Windows.Graphics.Imaging
+winrt-Windows.Storage
+winrt-Windows.Storage.Streams

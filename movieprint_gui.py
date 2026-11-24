@@ -226,7 +226,7 @@ class Theme:
 Theme.apply_preset("Teal")
 
 # --- LOGGING SETUP ---
-def setup_file_logging():
+def setup_file_logging(log_dir=None):
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
 
@@ -236,7 +236,8 @@ def setup_file_logging():
         console_handler.setLevel(logging.INFO)
         root_logger.addHandler(console_handler)
 
-    log_dir = os.path.expanduser(os.path.join("~", ".pymovieprint", "logs"))
+    if log_dir is None:
+        log_dir = os.path.expanduser(os.path.join("~", ".pymovieprint", "logs"))
     try:
         os.makedirs(log_dir, exist_ok=True)
         log_file = os.path.join(log_dir, "pymovieprint.log")
@@ -689,7 +690,7 @@ class VideoPlayerWindow(ctk.CTkToplevel):
             self._tick()
 
     def play_with_audio(self):
-        executable = shutil.which('ffplay')
+        executable = shutil.which(DependencyManager.video_processing.FFPLAY_BIN)
         if not executable:
             messagebox.showerror('Audio player', 'FFplay is required for audio playback. Install a full FFmpeg build.')
             return

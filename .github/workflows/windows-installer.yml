@@ -1,0 +1,70 @@
+name: Windows installer acceptance
+
+on:
+  push:
+    branches:
+      - codex/windows-installer-rc
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-installer-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  install-and-exercise:
+    runs-on: windows-latest
+    timeout-minutes: 22
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          architecture: x64
+      - name: Stage the pinned build tools
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $cache = Join-Path (Get-Location) 'build\windows-installer'
+          $tools = Join-Path $cache 'tools'
+          New-Item -ItemType Directory -Force -Path $tools | Out-Null
+          gh release download is-6_4_3 --repo jrsoftware/issrc --pattern innosetup-6.4.3.exe --dir $tools
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup download failed' }
+          $installer = Join-Path $tools 'innosetup-6.4.3.exe'
+          if ((Get-FileHash -LiteralPath $installer).Hash.ToLowerInvariant() -ne 'f3c42116542c4cc57263c5ba6c4feabfc49fe771f2f98a79d2f7628b8762723b') {
+            throw 'Unexpected Inno Setup digest'
+          }
+          $compiler = Join-Path $tools 'Inno'
+          $process = Start-Process -FilePath $installer -ArgumentList @(
+            '/PORTABLE=1','/CURRENTUSER','/VERYSILENT','/SUPPRESSMSGBOXES','/NORESTART',
+            '/NOICONS',('/DIR="' + $compiler + '"')
+          ) -Wait -PassThru -WindowStyle Hidden
+          if ($process.ExitCode -ne 0) { throw "Portable Inno installation failed: $($process.ExitCode)" }
+          gh release download autobuild-2026-10-31-12-59 --repo FFmpeg-Builds/FFmpeg-Builds --pattern ffmpeg-n9.0.2-39-g7adfbe40dc-win64-lgpl-shared-9.0.zip --dir $cache
+          if ($LASTEXITCODE -ne 0) { throw 'FFmpeg archive download failed' }
+      - name: Build both installer revisions
+        shell: pwsh
+        run: |
+          .\windows\build-installer.ps1 -Python (Get-Command python).Source -Iscc '.\build\windows-installer\tools\Inno\ISCC.exe' -BuildUpgradeBaseline
+      - name: Run packaged Windows acceptance
+        shell: pwsh
+        run: |
+          python -m pip install -r windows/acceptance-requirements.txt
+          if ($LASTEXITCODE -ne 0) { throw 'Test dependency installation failed' }
+          python windows/test-installed.py (Join-Path $env:RUNNER_TEMP 'pymovieprint-acceptance') dist/windows-installer-rc/revision-3/PyMoviePrint-Setup-Baseline.exe dist/windows-installer-rc/revision-3/PyMoviePrint-Setup.exe
+          exit $LASTEXITCODE
+      - name: Retain evidence from the isolated test
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-installer-test-evidence
+          path: |
+            ${{ runner.temp }}/pymovieprint-acceptance/*.png
+            ${{ runner.temp }}/pymovieprint-acceptance/*.log
+            ${{ runner.temp }}/pymovieprint-acceptance/profile/PyMoviePrint/logs/*.log
+            dist/windows-installer-rc/revision-3/dependency-manifest.json
+            dist/windows-installer-rc/revision-3/*.sha256
+          if-no-files-found: warn
+          retention-days: 7
