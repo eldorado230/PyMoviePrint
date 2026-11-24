@@ -16,6 +16,11 @@ ROOT = Path(__file__).resolve().parent.parent
 NOTICE = re.compile(r'^(licen[sc]e|copying|notice|credits)', re.IGNORECASE)
 OPENCV_VERSION = '4.7.0.72'
 OPENCV_PLUGIN_SHA256 = '3552d34215ba2ea22ce68c54b0bee03b857610ebc30e102f6c982b3e415a159c'
+OPENCV_IPP_ARCHIVE = (
+    'https://raw.githubusercontent.com/opencv/opencv_3rdparty/'
+    'a56b6ac6f030c312b2dce17430eef13aed9af274/ippicv/ippicv_2020_win_intel64_20191018_general.zip'
+)
+OPENCV_IPP_SHA256 = 'e64e09f8a2e121d4fff440fb12b1298bc0760f1391770aefe5d1deb6630352b7'
 
 
 def sha256(path):
@@ -23,23 +28,27 @@ def sha256(path):
         return hashlib.file_digest(stream, 'sha256').hexdigest()
 
 
-def ffmpeg_runtime(app, cache, notices):
-    pin = json.loads((ROOT / 'windows' / 'ffmpeg-runtime.json').read_bytes())
-    archive = cache / pin['url'].rsplit('/', 1)[-1]
+def verified_archive(cache, url, checksum):
+    archive = cache / url.rsplit('/', 1)[-1]
     if not archive.exists():
         partial = archive.with_suffix('.part')
         try:
-            request = urllib.request.Request(pin['url'], headers={'User-Agent': 'PyMoviePrint-build'})
+            request = urllib.request.Request(url, headers={'User-Agent': 'PyMoviePrint-build'})
             with urllib.request.urlopen(request, timeout=60) as response, partial.open('wb') as output:
                 shutil.copyfileobj(response, output)
-            if sha256(partial) != pin['sha256']:
-                raise ValueError('Downloaded FFmpeg archive does not match the pinned checksum.')
+            if sha256(partial) != checksum:
+                raise ValueError(f'Downloaded archive does not match the pinned checksum: {url}')
             partial.replace(archive)
         finally:
             partial.unlink(missing_ok=True)
-    if sha256(archive) != pin['sha256']:
-        raise ValueError(f'Cached FFmpeg archive does not match the pinned checksum: {archive}')
+    elif sha256(archive) != checksum:
+        raise ValueError(f'Cached archive does not match the pinned checksum: {archive}')
+    return archive
 
+
+def ffmpeg_runtime(app, cache, notices):
+    pin = json.loads((ROOT / 'windows' / 'ffmpeg-runtime.json').read_bytes())
+    archive = verified_archive(cache, pin['url'], pin['sha256'])
     media = app / 'ffmpeg'
     media.mkdir()
     license_target = notices / 'FFmpeg'
@@ -122,7 +131,7 @@ def python_notices(notices):
     return packages
 
 
-def opencv_runtime(app, notices):
+def opencv_runtime(app, cache, notices):
     distribution = metadata.distribution('opencv-python')
     if distribution.version != OPENCV_VERSION:
         raise ValueError('Review OpenCV source provenance before updating the Windows wheel.')
@@ -140,18 +149,36 @@ def opencv_runtime(app, notices):
         'plugin_libvpx_source': 'https://chromium.googlesource.com/webm/libvpx/+/refs/tags/v1.12.0',
         'plugin_openh264_headers': 'https://github.com/cisco/openh264/tree/v1.8.0/codec/api/svc',
     }
-    (notices / 'opencv-python' / 'SOURCE.txt').write_text(
+    package_notices = notices / 'opencv-python'
+    (package_notices / 'SOURCE.txt').write_text(
         'OpenCV and its separate FFmpeg plugin source references from the upstream build recipe:\n'
         + ''.join(f'{component}: {url}\n' for component, url in source.items())
         + 'The source archives must accompany a public distribution.\n',
         encoding='utf-8',
     )
+    # The Windows wheel reports static Intel IPP. Its redistribution terms
+    # require reproducing the copyright and licence from this pinned package.
+    ipp = verified_archive(cache, OPENCV_IPP_ARCHIVE, OPENCV_IPP_SHA256)
+    ipp_notices = package_notices / 'Intel-IPP'
+    ipp_notices.mkdir()
+    with zipfile.ZipFile(ipp) as archive:
+        for name in ('EULA.rtf', 'third-party-programs.txt'):
+            (ipp_notices / name).write_bytes(archive.read(f'ippicv_win/{name}'))
+    from cv2 import getBuildInformation
+
+    (package_notices / 'BUILD.txt').write_text(getBuildInformation(), encoding='utf-8')
     return {
         'wheel_version': distribution.version,
         'plugin': plugins[0].relative_to(app).as_posix(),
         'plugin_sha256': OPENCV_PLUGIN_SHA256,
         'plugin_license': 'LGPL-2.1-or-later',
         'source_references': source,
+        'build_information': 'licenses/opencv-python/BUILD.txt',
+        'intel_ipp': {
+            'archive': OPENCV_IPP_ARCHIVE,
+            'sha256': OPENCV_IPP_SHA256,
+            'notices': 'licenses/opencv-python/Intel-IPP',
+        },
     }
 
 
@@ -165,7 +192,7 @@ def main():
         'python': sys.version,
         'build_packages': python_notices(notices),
         'ffmpeg': ffmpeg_runtime(app, cache, notices),
-        'opencv': opencv_runtime(app, notices),
+        'opencv': opencv_runtime(app, cache, notices),
         'distribution_status': 'Private candidate. Public distribution pending corresponding-source delivery.',
     }
     (app / 'dependency-manifest.json').write_text(json.dumps(manifest, indent=2) + '\n', encoding='utf-8')

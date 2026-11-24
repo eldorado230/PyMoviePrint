@@ -390,7 +390,8 @@ def main(root, baseline, setup):
     installer(uninstaller[0], [], environment, root / 'uninstall.log')
     wait_for(lambda: not installed_exe.exists(), 'installed executable removed')
     assert user_installation() is None
-    assert all(verb_value(extension, command=True) is None for extension in EXTENSIONS[:-1])
+    wait_for(lambda: all(verb_value(extension, command=True) is None for extension in EXTENSIONS[:-1]),
+             'Explorer verbs removed by the uninstaller')
     assert verb_value('.wmv', command=True) == foreign_command
     assert all(digest(path) == original[path] for path in (project, video))
     assert json.loads(settings.read_text(encoding='utf-8'))['input_paths_list'] == [str(video)]

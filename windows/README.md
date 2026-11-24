@@ -18,7 +18,7 @@ The Windows installer workflow runs on a disposable hosted desktop. It launches 
 
 ## Redistribution review
 
-The installer is for private evaluation. `dependency-manifest.json` records build-time package versions and notices, standalone FFmpeg build configuration and binary hashes, and the exact OpenCV FFmpeg plugin binary and its upstream source references. Direct versions and the FFmpeg archive are pinned. Transitive package resolution can vary between builds.
+The installer is for private evaluation. `dependency-manifest.json` records build-time package versions and notices, standalone FFmpeg build configuration and binary hashes, and the exact OpenCV FFmpeg plugin and its upstream source references. The installer also includes the Intel IPP notices required by the OpenCV wheel. Direct versions and the FFmpeg archive are pinned. Transitive package resolution can vary between builds.
 
 The standalone tools use the shared LGPLv3 build. The OpenCV wheel ships a separate plugin built with FFmpeg 4.4.3, libvpx 1.12.0 and AOM 3.5.0. Public distribution still requires a complete corresponding-source package for the shipped components, including the libraries linked into the standalone FFmpeg DLLs. See [FFmpeg's licensing guidance](https://ffmpeg.org/legal.html), the [OpenCV plugin build recipe](https://github.com/opencv/opencv_3rdparty/tree/7dd0d4f1d6fe75f05f3d3b5e38cbc96c1a2d2809/ffmpeg), and the [PyInstaller licence exception](https://pyinstaller.org/en/stable/license.html).
 
